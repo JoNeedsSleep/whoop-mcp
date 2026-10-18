@@ -5,6 +5,8 @@ import { describe, it, expect, vi } from "vitest";
 import request from "supertest";
 import express from "express";
 import { createDashboardRouter } from "../src/dashboard/routes.js";
+import { WhoopOAuthProvider } from "../src/auth/oauth-provider.js";
+import { AUTHORIZATION_BUSY_MESSAGE, MAX_PENDING_AUTHORIZATIONS } from "../src/auth/pending-authorizations.js";
 
 describe("dashboard", () => {
   it("rejects /connected when the state does not match the session (CSRF guard)", async () => {
@@ -69,7 +71,29 @@ it("ignores hostile Host/protocol when constructing callback and uses secure hos
   expect(authorize.mock.calls[0][1].redirectUri).toBe("https://mcp.example.com/dashboard/connected");
   const cookies = r.headers["set-cookie"].join(";");
   expect(cookies).toContain("__Host-whoop_dashboard_session");
-  expect(cookies).toContain("Secure");
-  expect(cookies).toContain("HttpOnly");
+  expect(cookies).toMatch(/;\s*secure(?:;|$)/i);
+  expect(cookies).toMatch(/;\s*httponly(?:;|$)/i);
   expect(cookies).not.toMatch(/Domain=/i);
+});
+
+it("applies global pending-state admission to dashboard login regardless of forwarded identity", async () => {
+  const insert = vi.fn();
+  const getClientCredentials = vi.fn();
+  const rows = Array.from({ length: MAX_PENDING_AUTHORIZATIONS }, (_, i) => ({ whoopState: String(i), expiresAt: new Date(Date.now() + 60000) }));
+  const tx = { execute: async () => ({ rows: [{ locked: true }] }),
+    select: () => ({ from: () => ({ limit: async () => rows }) }), insert };
+  const provider = new WhoopOAuthProvider({ db: { transaction: async (fn: any) => fn(tx) } as any,
+    tokenStore: {} as any, credentials: { getClientCredentials },
+    publicBaseUrl: "https://mcp.example.com", approvedClientRedirectUris: [] });
+  const app = express();
+  app.use("/dashboard", createDashboardRouter({ provider, tokenStore: {} as any,
+    sessionSecret: "s".repeat(32), publicBaseUrl: "https://mcp.example.com" }));
+  for (const forwarded of ["192.0.2.1", "198.51.100.2"]) {
+    const r = await request(app).get("/dashboard/connect").set("X-Forwarded-For", forwarded);
+    expect(r.status).toBe(503);
+    expect(r.text).toBe(AUTHORIZATION_BUSY_MESSAGE);
+    expect(r.headers.location).toBeUndefined();
+  }
+  expect(insert).not.toHaveBeenCalled();
+  expect(getClientCredentials).not.toHaveBeenCalled();
 });

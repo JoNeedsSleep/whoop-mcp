@@ -1,8 +1,10 @@
 import express from "express";
+import { createHash } from "node:crypto";
 import request from "supertest";
 import { tokenHandler } from "@modelcontextprotocol/sdk/server/auth/handlers/token.js";
 import { describe, it, expect, vi } from "vitest";
 import { WhoopOAuthProvider, pkceChallenge } from "../src/auth/oauth-provider.js";
+import { AUTHORIZATION_BUSY_MESSAGE, MAX_PENDING_AUTHORIZATIONS } from "../src/auth/pending-authorizations.js";
 const uri = "https://client.example/cb";
 const verifier = "v".repeat(43);
 const client = { client_id: "client-1", redirect_uris: [uri], token_endpoint_auth_method: "none" } as any;
@@ -61,13 +63,30 @@ describe("bearer expiry and registrations", () => {
   it("renders browser-bound per-client consent before requesting WHOOP authorization", async () => {
     const values = vi.fn(async (_row: any) => {});
     const res: any = { cookie: vi.fn(), set: vi.fn(), type: vi.fn(() => res), send: vi.fn(), redirect: vi.fn() };
-    const p = new WhoopOAuthProvider({ ...base, tokenStore: {} as any, db: { insert: () => ({ values }) } as any });
+    const tx = { execute: async () => ({ rows: [{ locked: true }] }),
+      select: () => ({ from: () => ({ limit: async () => [] }) }), insert: () => ({ values }) };
+    const p = new WhoopOAuthProvider({ ...base, tokenStore: {} as any, db: { transaction: async (fn: any) => fn(tx) } as any });
     await p.authorize({ ...client, client_name: "<script>attack</script>" }, { redirectUri: uri, codeChallenge: pkceChallenge(verifier) }, res);
     expect(res.redirect).not.toHaveBeenCalled();
     expect(res.send.mock.calls[0][0]).toContain("&lt;script&gt;");
     expect(values.mock.calls[0][0].payload.stage).toBe("consent");
     expect(res.cookie.mock.calls[0][2]).toMatchObject({ secure: true, httpOnly: true, path: "/" });
   });
+});
+
+it("refuses initial consent at the global cap without rendering a form or setting cookies", async () => {
+  const insert = vi.fn();
+  const rows = Array.from({ length: MAX_PENDING_AUTHORIZATIONS }, (_, i) => ({ whoopState: String(i), expiresAt: new Date(Date.now() + 60000) }));
+  const tx = { execute: async () => ({ rows: [{ locked: true }] }),
+    select: () => ({ from: () => ({ limit: async () => rows }) }), insert };
+  const res: any = { status: vi.fn(() => res), cookie: vi.fn(), set: vi.fn(), send: vi.fn(), redirect: vi.fn() };
+  const p = new WhoopOAuthProvider({ ...base, tokenStore: {} as any, db: { transaction: async (fn: any) => fn(tx) } as any });
+  await p.authorize(client, { redirectUri: uri, codeChallenge: pkceChallenge(verifier) }, res);
+  expect(res.status).toHaveBeenCalledWith(503);
+  expect(res.send).toHaveBeenCalledWith(AUTHORIZATION_BUSY_MESSAGE);
+  expect(res.cookie).not.toHaveBeenCalled();
+  expect(res.redirect).not.toHaveBeenCalled();
+  expect(insert).not.toHaveBeenCalled();
 });
 
 it("preserves the locked SDK token-handler PKCE handoff", async () => {
@@ -92,4 +111,29 @@ it("rejects a forged consent POST before touching pending state", async () => {
   const r = await request(app).post("/oauth/consent").set("Origin", "https://evil.example")
     .type("form").send({ state: "s".repeat(43), csrf: "c".repeat(43), decision: "allow" });
   expect(r.status).toBe(403); expect(select).not.toHaveBeenCalled();
+});
+
+it("fails closed with a fixed response if consent-to-WHOOP admission encounters a storage error", async () => {
+  const csrf = "c".repeat(43);
+  const state = "s".repeat(43);
+  const pending = { whoopState: state, expiresAt: new Date(Date.now() + 60000), payload: {
+    stage: "consent", clientId: client.client_id, clientRedirectUri: uri,
+    clientCodeChallenge: pkceChallenge(verifier), scopes: ["mcp"], whoopCodeVerifier: verifier,
+    consentHash: createHash("sha256").update(csrf).digest("hex"),
+  } };
+  const getClientCredentials = vi.fn();
+  const transaction = vi.fn(async () => { throw new Error("private database diagnostics and credentials"); });
+  const db = { transaction,
+    select: () => ({ from: () => ({ where: async () => [pending] }) }),
+    delete: () => ({ where: () => ({ returning: async () => [pending] }) }) } as any;
+  const p = new WhoopOAuthProvider({ ...base, db, tokenStore: {} as any, credentials: { getClientCredentials } });
+  const app = express(); app.use(express.urlencoded({ extended: false })); app.use(p.consentRouter());
+  const r = await request(app).post("/oauth/consent").set("Origin", base.publicBaseUrl)
+    .set("Cookie", `__Host-whoop_consent=${csrf}`).type("form").send({ state, csrf, decision: "allow" });
+  expect(transaction).toHaveBeenCalledOnce();
+  expect(r.status).toBe(503);
+  expect(r.text).toBe(AUTHORIZATION_BUSY_MESSAGE);
+  expect(r.headers.location).toBeUndefined();
+  expect((r.headers["set-cookie"] ?? []).join(";")).not.toContain("__Host-whoop_flow_");
+  expect(getClientCredentials).not.toHaveBeenCalled();
 });

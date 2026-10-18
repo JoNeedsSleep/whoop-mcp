@@ -5,7 +5,7 @@ type Range = { start?: string; end?: string; limit?: number };
 export class WhoopClient {
   constructor(
     private getAccessToken: () => Promise<string>,
-    private forceRefresh: () => Promise<string>,
+    private forceRefresh: (rejectedAccessToken: string) => Promise<string>,
     private fetchImpl: FetchImpl = fetch,
   ) {}
 
@@ -17,9 +17,10 @@ export class WhoopClient {
   }
 
   private async json<T>(path: string, query: Record<string, string> = {}): Promise<T> {
-    let res = await this.raw(path, query);
+    const accessToken = await this.getAccessToken();
+    let res = await this.raw(path, query, accessToken);
     if (res.status === 401) {
-      const at = await this.forceRefresh();
+      const at = await this.forceRefresh(accessToken);
       res = await this.raw(path, query, at);
       if (res.status === 401) throw new Error("WHOOP authorization failed — please reconnect your WHOOP account.");
     }

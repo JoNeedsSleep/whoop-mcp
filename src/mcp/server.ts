@@ -28,7 +28,7 @@ export function buildMcpServer(deps: { tokenStore: TokenStore; credentials: Cred
   const clientFor = (userId: string) =>
     new WhoopClient(
       () => deps.tokenStore.getValidAccessToken(userId),
-      async () => deps.tokenStore.forceRefreshAccessToken(userId),
+      (rejectedAccessToken) => deps.tokenStore.forceRefreshAccessToken(userId, rejectedAccessToken),
     );
   registerWhoopTools(server, clientFor, (extra: any) => extra?.authInfo?.extra?.userId);
   return server;

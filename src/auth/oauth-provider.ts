@@ -13,6 +13,7 @@ import type { CredentialProvider } from "../whoop/credentials.js";
 import { buildAuthorizeUrl } from "../whoop/oauth.js";
 import { BROWSER_COOKIE_OPTIONS, FLOW_TTL_MS, flowCookieName, nonceHash } from "./browser-binding.js";
 import { httpsCallback } from "../config.js";
+import { admitPendingAuthorization, AUTHORIZATION_BUSY_MESSAGE } from "./pending-authorizations.js";
 
 type Db = NodePgDatabase<typeof schema>;
 export interface ProviderDeps {
@@ -108,8 +109,10 @@ export class WhoopOAuthProvider implements OAuthServerProvider {
     const state = random();
     const csrf = random();
     payload.consentHash = sha256hex(csrf);
-    await this.deps.db.insert(schema.pendingAuthorizations).values({ whoopState: state, payload,
-      expiresAt: new Date(Date.now() + PENDING_TTL_MS) });
+    if (!await admitPendingAuthorization(this.deps.db, { whoopState: state, payload,
+      expiresAt: new Date(Date.now() + PENDING_TTL_MS) })) {
+      res.status(503).send(AUTHORIZATION_BUSY_MESSAGE); return;
+    }
     res.cookie(CONSENT_COOKIE, csrf, { ...cookieOptions, maxAge: PENDING_TTL_MS });
     res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
       "Content-Security-Policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" });
@@ -163,8 +166,10 @@ export class WhoopOAuthProvider implements OAuthServerProvider {
   private async startWhoop(payload: PendingPayload, res: Response, browserNonce = random()): Promise<void> {
     const whoopState = random();
     const boundPayload: PendingPayload = { ...payload, browserBindingHash: nonceHash(browserNonce) };
-    await this.deps.db.insert(schema.pendingAuthorizations).values({ whoopState, payload: boundPayload,
-      expiresAt: new Date(Date.now() + PENDING_TTL_MS) });
+    if (!await admitPendingAuthorization(this.deps.db, { whoopState, payload: boundPayload,
+      expiresAt: new Date(Date.now() + PENDING_TTL_MS) })) {
+      res.status(503).send(AUTHORIZATION_BUSY_MESSAGE); return;
+    }
     const creds = await this.deps.credentials.getClientCredentials();
     // Dashboard login also gets a browser binding before the WHOOP leg.
     res.cookie(flowCookieName(whoopState), browserNonce, { ...cookieOptions, maxAge: PENDING_TTL_MS });

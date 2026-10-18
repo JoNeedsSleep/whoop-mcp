@@ -18,7 +18,9 @@ it("binds consent through the WHOOP callback and prevents a second browser from 
   const codes: any[] = [];
   const consumed = vi.fn();
   const db: any = {
-    select: () => ({ from: () => ({ where: async () => pending ? [pending] : [] }) }),
+    transaction: async (fn: any) => fn(db),
+    execute: async () => ({ rows: [{ locked: true }] }),
+    select: () => ({ from: () => ({ where: async () => pending ? [pending] : [], limit: async () => pending ? [pending] : [] }) }),
     insert: (table: any) => ({ values: async (row: any) => {
       if (table === schema.pendingAuthorizations) pending = row;
       else if (table === schema.oauthAuthCodes) codes.push(row);
@@ -77,7 +79,10 @@ it("binds consent through the WHOOP callback and prevents a second browser from 
 
 it("also gives internal dashboard login a flow-specific secure browser binding", async () => {
   let pending: any;
-  const db = { insert: () => ({ values: async (row: any) => { pending = row; } }) } as any;
+  const db: any = { transaction: async (fn: any) => fn(db),
+    execute: async () => ({ rows: [{ locked: true }] }),
+    select: () => ({ from: () => ({ limit: async () => [] }) }),
+    insert: () => ({ values: async (row: any) => { pending = row; } }) };
   const provider = new WhoopOAuthProvider({ db, tokenStore: {} as any,
     credentials: { getClientCredentials: async () => ({ clientId: "fixture-id", clientSecret: "fixture-secret" }) },
     publicBaseUrl: origin, approvedClientRedirectUris: [] });

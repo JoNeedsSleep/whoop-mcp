@@ -51,7 +51,7 @@ export function createApp(config: AppConfig): express.Express {
     if (typeof userId !== "string") { res.status(401).end(); return; }
     try {
       const client = new WhoopClient(() => tokenStore.getValidAccessToken(userId),
-        () => tokenStore.forceRefreshAccessToken(userId));
+        (rejectedAccessToken) => tokenStore.forceRefreshAccessToken(userId, rejectedAccessToken));
       res.json(await healthSummary(client, date));
     } catch { res.status(502).json({ error: "HEALTH_DATA_UNAVAILABLE" }); }
   });

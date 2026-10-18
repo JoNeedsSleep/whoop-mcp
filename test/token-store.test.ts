@@ -15,17 +15,13 @@ type FakeRow = {
   updatedAt: Date;
 };
 
-/**
- * Minimal fake db supporting only the exact Drizzle chains TokenStore.getValidAccessToken
- * calls: db.select().from(...).where(...) -> Promise<[row]>, and
- * db.update(...).set(...).where(...) -> mutates the row in place (simulating persistence).
- */
+// Single-call fixture only; database locking is covered by the real PostgreSQL suite.
 function fakeDb(row: FakeRow) {
-  return {
+  const db = {
     select: () => ({
-      from: () => ({
-        where: async () => [row],
-      }),
+      from: (table: unknown) => table === schema.users
+        ? { where: () => ({ for: async () => [{ id: row.userId }] }) }
+        : { where: async () => [row] },
     }),
     update: () => ({
       set: (patch: Partial<FakeRow>) => ({
@@ -35,6 +31,7 @@ function fakeDb(row: FakeRow) {
       }),
     }),
   };
+  return { ...db, transaction: vi.fn(async (fn: (tx: typeof db) => unknown, _config?: unknown) => fn(db)) };
 }
 
 describe("TokenStore.getValidAccessToken (fake db)", () => {
@@ -73,20 +70,22 @@ describe("TokenStore.getValidAccessToken (fake db)", () => {
         scopes: ["offline"],
       }),
     );
-    const store = new TokenStore(fakeDb(row) as any, key, refresh);
+    const db = fakeDb(row);
+    const store = new TokenStore(db as any, key, refresh);
 
     const at = await store.getValidAccessToken("user-1");
 
     expect(at).toBe("new-access");
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledWith("old-refresh");
+    expect(db.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "read committed" });
     expect(decrypt(row.refreshTokenEnc, key)).toBe("new-refresh");
     expect(row.accessTokenExpiresAt.getTime()).toBeGreaterThan(Date.now());
   });
 });
 
 describe("TokenStore.forceRefreshAccessToken (fake db)", () => {
-  it("unconditionally refreshes and persists even when the stored token is not expired", async () => {
+  it("refreshes the exact rejected token even when it is not expired", async () => {
     const row: FakeRow = {
       userId: "user-1",
       accessTokenEnc: encrypt("current-access", key),
@@ -105,13 +104,38 @@ describe("TokenStore.forceRefreshAccessToken (fake db)", () => {
     );
     const store = new TokenStore(fakeDb(row) as any, key, refresh);
 
-    const at = await store.forceRefreshAccessToken("user-1");
+    const at = await store.forceRefreshAccessToken("user-1", "current-access");
 
     expect(at).toBe("forced-new-access");
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledWith("current-refresh");
     expect(decrypt(row.accessTokenEnc, key)).toBe("forced-new-access");
     expect(decrypt(row.refreshTokenEnc, key)).toBe("forced-new-refresh");
+  });
+
+  it("reuses a replacement token when a delayed 401 names the old token", async () => {
+    const row: FakeRow = {
+      userId: "user-1", accessTokenEnc: encrypt("replacement-access", key),
+      refreshTokenEnc: encrypt("replacement-refresh", key),
+      accessTokenExpiresAt: new Date(Date.now() + 3600_000), scopes: ["offline"], updatedAt: new Date(),
+    };
+    const refresh = vi.fn();
+    const store = new TokenStore(fakeDb(row) as any, key, refresh);
+    expect(await store.forceRefreshAccessToken("user-1", "old-access")).toBe("replacement-access");
+    expect(refresh).not.toHaveBeenCalled();
+    expect(decrypt(row.refreshTokenEnc, key)).toBe("replacement-refresh");
+  });
+
+  it("does not replace stored credentials when the upstream refresh fails", async () => {
+    const row: FakeRow = {
+      userId: "user-1", accessTokenEnc: encrypt("current-access", key),
+      refreshTokenEnc: encrypt("current-refresh", key),
+      accessTokenExpiresAt: new Date(0), scopes: ["offline"], updatedAt: new Date(),
+    };
+    const before = { ...row };
+    const store = new TokenStore(fakeDb(row) as any, key, vi.fn(async () => { throw new Error("refresh failed"); }));
+    await expect(store.forceRefreshAccessToken("user-1", "current-access")).rejects.toThrow("refresh failed");
+    expect(row).toEqual(before);
   });
 });
 

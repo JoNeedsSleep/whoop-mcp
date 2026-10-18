@@ -65,30 +65,47 @@ export class TokenStore {
     if (row.accessTokenExpiresAt.getTime() - Date.now() > EXPIRY_SKEW_MS) {
       return decrypt(row.accessTokenEnc, this.keyHex);
     }
-    return this.refreshAndStore(userId, row.refreshTokenEnc);
+    return this.refreshAndStore(userId);
   }
 
-  async forceRefreshAccessToken(userId: string): Promise<string> {
-    const [row] = await this.db.select().from(schema.whoopTokens)
-      .where(eq(schema.whoopTokens.userId, userId));
-    if (!row) throw new Error("WHOOP not connected");
-    return this.refreshAndStore(userId, row.refreshTokenEnc);
+  async forceRefreshAccessToken(userId: string, rejectedAccessToken: string): Promise<string> {
+    return this.refreshAndStore(userId, rejectedAccessToken);
   }
 
-  private async refreshAndStore(userId: string, encryptedRefreshToken: string): Promise<string> {
-    const refreshed = await this.refresh(decrypt(encryptedRefreshToken, this.keyHex));
-    await this.db.update(schema.whoopTokens).set({
-      accessTokenEnc: encrypt(refreshed.accessToken, this.keyHex),
-      refreshTokenEnc: encrypt(refreshed.refreshToken, this.keyHex),
-      accessTokenExpiresAt: refreshed.expiresAt, scopes: refreshed.scopes, updatedAt: new Date(),
-    }).where(eq(schema.whoopTokens.userId, userId));
-    return refreshed.accessToken;
+  private async refreshAndStore(userId: string, rejectedAccessToken?: string): Promise<string> {
+    // A REPEATABLE READ default could retain the snapshot from before the user
+    // lock wait and read the previous refresh token even after the winner commits.
+    return this.db.transaction(async (tx) => {
+      // WHOOP rotates refresh tokens on use. Serialize across server processes,
+      // using the same users -> whoop_tokens lock order as login/upsert. The
+      // upstream refresh has a bounded timeout; keep the lock until persistence.
+      await this.lockTokenUser(tx, userId, "WHOOP not connected");
+      const [row] = await tx.select().from(schema.whoopTokens)
+        .where(eq(schema.whoopTokens.userId, userId));
+      if (!row) throw new Error("WHOOP not connected");
+      const currentAccessToken = decrypt(row.accessTokenEnc, this.keyHex);
+      if (rejectedAccessToken !== undefined) {
+        // A delayed 401 for an old token must not invalidate the replacement
+        // that another request (or a new login) has already stored.
+        if (currentAccessToken !== rejectedAccessToken) return currentAccessToken;
+      } else if (row.accessTokenExpiresAt.getTime() - Date.now() > EXPIRY_SKEW_MS) {
+        return currentAccessToken;
+      }
+      const refreshed = await this.refresh(decrypt(row.refreshTokenEnc, this.keyHex));
+      await tx.update(schema.whoopTokens).set({
+        accessTokenEnc: encrypt(refreshed.accessToken, this.keyHex),
+        refreshTokenEnc: encrypt(refreshed.refreshToken, this.keyHex),
+        accessTokenExpiresAt: refreshed.expiresAt, scopes: refreshed.scopes, updatedAt: new Date(),
+      }).where(eq(schema.whoopTokens.userId, userId));
+      return refreshed.accessToken;
+    }, { isolationLevel: "read committed" });
   }
 
-  private async lockTokenUser(tx: Transaction, userId: string): Promise<void> {
-    // Every token issuer and revoke-all uses this same row and lock order.
+  private async lockTokenUser(tx: Transaction, userId: string, missingMessage = "Account not allowed"): Promise<void> {
+    // Every token issuer, WHOOP refresh and revoke-all uses this same row and lock order.
     const [user] = await tx.select().from(schema.users).where(eq(schema.users.id, userId)).for("update");
-    if (!user || (this.allowedWhoopUserId && user.whoopUserId !== this.allowedWhoopUserId)) {
+    if (!user) throw new Error(missingMessage);
+    if (this.allowedWhoopUserId && user.whoopUserId !== this.allowedWhoopUserId) {
       throw new Error("Account not allowed");
     }
   }
