@@ -70,7 +70,10 @@ release. The tests also use the already-locked MCP SDK to check interoperability
 The machine credential intentionally has an independent operational lifecycle:
 it does not expire at every user login. Rotate by replacing the private gateway
 file and matching WHOOP hash, then restarting both. Removing the WHOOP hash
-revokes it. Keep the raw machine key out of the WHOOP service. Rotating the owner
+revokes it. Store only the verifier hash in WHOOP configuration; the service
+still receives the raw bearer on HTTPS requests. A compromised service or its
+TLS terminator can capture it. That credential authorizes the same bounded
+summary route, not gateway or model-account login. Rotating the owner
 key/hash invalidates owner sessions; revoke-all first to invalidate client
 grants too. Losing WHOOP's upstream grant still requires reconnecting WHOOP.
 
