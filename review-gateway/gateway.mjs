@@ -1,4 +1,4 @@
-// Prototype trust boundary. Deploy independently of the WHOOP server, after review.
+// Trust boundary adapter. Deploy independently of the WHOOP server, after review.
 // No SDK discovery, model calls, secrets loading, tools supplied by upstream, or logging.
 export const MAX_BYTES = 4096;
 const fail = () => { throw new Error("INVALID_HEALTH_DATA"); };
@@ -77,7 +77,7 @@ export async function readBoundedJson(response) {
 export function createGateway({ origin, whoopBearer, fetchImpl = fetch, now = Date.now }) {
   const u = new URL(origin);
   if (u.protocol !== "https:" || u.origin !== origin || u.username || u.password ||
-      typeof whoopBearer !== "string" || !/^whoopmcp_pat_[A-Za-z0-9_-]{43}$/.test(whoopBearer)) fail();
+      typeof whoopBearer !== "string" || !/^whoopgw_service_[A-Za-z0-9_-]{43}$/.test(whoopBearer)) fail();
   let active = false;
   let calls = [];
   return async (name, input) => {

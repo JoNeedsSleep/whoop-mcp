@@ -3,13 +3,15 @@ import { render } from "@testing-library/react";
 import { ConnectionGuide } from "./ConnectionGuide";
 
 describe("ConnectionGuide", () => {
-  it("describes both planned clients and the release gate", () => {
+  it("describes both registered clients and the deployment requirement", () => {
     const { container } = render(<ConnectionGuide />);
     const text = container.textContent ?? "";
     expect(text).toContain("Codex");
     expect(text).toContain("Claude Code");
-    expect(text).toContain("connections are not enabled yet");
-    expect(text).toContain("separate, revocable connection for each client");
+    expect(text).toContain("deployment required");
+    expect(text).toContain("separate, revocable connection");
+    expect(text).toContain("client ID codex");
+    expect(text).toContain("client ID claude-code");
     expect(text).toContain("seven days");
   });
 

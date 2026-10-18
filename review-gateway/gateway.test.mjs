@@ -5,7 +5,7 @@ const day = "2026-10-18";
 const good = () => ({ date: day, status: "AVAILABLE", recovery_score: 70, hrv_ms: 45,
   resting_heart_rate: 55, sleep_ms: 28000000, sleep_performance: 89, strain: 10.2 });
 const response = (v) => new Response(JSON.stringify(v), { headers: { "content-type": "application/json" } });
-const options = (fetchImpl) => ({ origin: "https://whoop.example", whoopBearer: `whoopmcp_pat_${"a".repeat(43)}`, fetchImpl });
+const options = (fetchImpl) => ({ origin: "https://whoop.example", whoopBearer: `whoopgw_service_${"a".repeat(43)}`, fetchImpl });
 
 test("only a fixed, immutable tool definition is exposed", () => {
   assert.equal(TOOLS.length, 1);

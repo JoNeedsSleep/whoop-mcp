@@ -13,6 +13,7 @@ import { createDashboardRouter } from "./dashboard/routes.js";
 import { healthSummary, utcDay } from "./whoop/health-summary.js";
 import { WhoopClient } from "./whoop/client.js";
 import { buildMcpServer } from "./mcp/server.js";
+import { verifyGatewayServiceToken } from "./auth/gateway-service.js";
 
 export function createApp(config: AppConfig): express.Express {
   const app = express();
@@ -41,15 +42,18 @@ export function createApp(config: AppConfig): express.Express {
   app.use("/dashboard", createDashboardRouter({ provider, tokenStore, sessionSecret: config.sessionSecret, publicBaseUrl: config.publicBaseUrl }));
 
   const auth = requireBearerAuth({ verifier: provider, requiredScopes: ["mcp"] });
-  app.get("/internal/health-summary", auth, async (req, res) => {
+  app.get("/internal/health-summary", async (req, res) => {
+    if (!verifyGatewayServiceToken(req.headers.authorization, config.gatewayServiceTokenSha256)) {
+      res.status(401).json({ error: "UNAUTHORIZED" }); return;
+    }
     let date: string;
     try {
       if (Object.keys(req.query).length !== 1) throw new Error("Invalid query");
       date = utcDay(req.query.date);
     } catch { res.status(400).json({ error: "INVALID_DATE" }); return; }
-    const userId = req.auth?.extra?.userId;
-    if (typeof userId !== "string") { res.status(401).end(); return; }
     try {
+      const userId = await tokenStore.gatewayUserId();
+      if (!userId) { res.status(503).json({ error: "HEALTH_DATA_UNAVAILABLE" }); return; }
       const client = new WhoopClient(() => tokenStore.getValidAccessToken(userId),
         (rejectedAccessToken) => tokenStore.forceRefreshAccessToken(userId, rejectedAccessToken));
       res.json(await healthSummary(client, date));

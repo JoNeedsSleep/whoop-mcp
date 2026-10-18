@@ -273,8 +273,8 @@ export function TokensCard({ onUnauthorized }: { onUnauthorized: () => void }) {
             </Button>
           </div>
           <p className="text-sm text-muted-foreground">
-            Codex and Claude Code connections are pending the secure gateway. This token is not
-            a gateway credential.
+            Codex and Claude Code sign in separately through the gateway. This token is not
+            a gateway credential; see the gateway setup instructions.
           </p>
           <DialogFooter showCloseButton />
         </DialogContent>

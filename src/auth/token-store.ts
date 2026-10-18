@@ -32,6 +32,13 @@ export class TokenStore {
     return user?.whoopUserId === this.allowedWhoopUserId;
   }
 
+  async gatewayUserId(): Promise<string | null> {
+    if (!this.allowedWhoopUserId) return null;
+    const [user] = await this.db.select().from(schema.users)
+      .where(eq(schema.users.whoopUserId, this.allowedWhoopUserId));
+    return user?.id ?? null;
+  }
+
   async upsertUserAndTokens(whoopUserId: string, email: string | null, t: WhoopTokenSet): Promise<string> {
     // Atomic: the user row and its token row must appear together. Without the transaction,
     // a crash between the two writes could leave a user with no token row (permanent
