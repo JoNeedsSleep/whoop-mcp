@@ -1,179 +1,204 @@
 import { createHash, randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
-import type { Response } from "express";
+import { Router, type Response } from "express";
 import type { OAuthServerProvider, AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import {
-  InvalidTokenError,
-  InvalidGrantError,
-  UnsupportedGrantTypeError,
-} from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import type {
-  OAuthClientInformationFull,
-  OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+import { InvalidTokenError, InvalidGrantError, InvalidRequestError, UnsupportedGrantTypeError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { schema } from "../db/client.js";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import type { TokenStore } from "./token-store.js";
+import { OAUTH_TOKEN_TTL_SECONDS, type TokenStore } from "./token-store.js";
 import type { CredentialProvider } from "../whoop/credentials.js";
 import { buildAuthorizeUrl } from "../whoop/oauth.js";
+import { httpsCallback } from "../config.js";
 
 type Db = NodePgDatabase<typeof schema>;
-
 export interface ProviderDeps {
   tokenStore: TokenStore;
   credentials: CredentialProvider;
   db: Db;
   publicBaseUrl: string;
+  approvedClientRedirectUris: string[];
 }
-
+export const DASHBOARD_CLIENT_ID = "whoop-mcp-dashboard";
 const sha256hex = (raw: string) => createHash("sha256").update(raw).digest("hex");
-const base64url = (buf: Buffer) => buf.toString("base64url");
-const pkceChallenge = (verifier: string) =>
-  base64url(createHash("sha256").update(verifier).digest());
-
+export const pkceChallenge = (verifier: string) => createHash("sha256").update(verifier).digest("base64url");
+const random = () => randomBytes(32).toString("base64url");
 const PENDING_TTL_MS = 10 * 60_000;
-// MCP tokens are intentionally long-lived; revocation is handled via mcpTokens.revokedAt
-// (checked in resolveMcpToken). The SDK's requireBearerAuth requires a numeric expiresAt,
-// so we advertise a far-future rolling expiry (1 year, epoch seconds).
-const ACCESS_TOKEN_TTL_SECONDS = 31_536_000;
+const CONSENT_COOKIE = "__Host-whoop_consent";
+const cookieOptions = { secure: true, httpOnly: true, sameSite: "lax" as const, path: "/" };
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-// Payload persisted for the WHOOP leg of the flow, keyed by whoopState.
 export interface PendingPayload extends Record<string, unknown> {
+  stage: "consent" | "whoop";
   clientId: string;
   clientRedirectUri: string;
   clientState?: string;
   clientCodeChallenge: string;
   scopes: string[];
   whoopCodeVerifier: string;
+  consentHash?: string;
 }
 
 export class WhoopOAuthProvider implements OAuthServerProvider {
+  // SDK 1.30 passes code_verifier only in this mode. Validation is performed
+  // mandatorily in exchangeAuthorizationCode, including dashboard/internal calls.
+  readonly skipLocalPkceValidation = true;
   constructor(private deps: ProviderDeps) {}
+
+  private approved(uri: string): boolean {
+    return httpsCallback.safeParse(uri).success && this.deps.approvedClientRedirectUris.includes(uri);
+  }
 
   get clientsStore(): OAuthRegisteredClientsStore {
     const db = this.deps.db;
+    const approved = (uri: string) => this.approved(uri);
     return {
-      // `metadata` holds the SDK's full client record and is the source of truth we return.
-      // A `client_secret` is present only for confidential clients; the SDK's authenticateClient
-      // does a plaintext comparison, so getClient must surface the stored plaintext secret.
-      async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
-        const [row] = await db
-          .select()
-          .from(schema.oauthClients)
-          .where(eq(schema.oauthClients.clientId, clientId));
-        if (!row) return undefined;
-        return {
-          ...(row.metadata as Record<string, unknown>),
-          client_id: row.clientId,
-          redirect_uris: row.redirectUris,
-        } as OAuthClientInformationFull;
+      async getClient(clientId): Promise<OAuthClientInformationFull | undefined> {
+        const [row] = await db.select().from(schema.oauthClients).where(eq(schema.oauthClients.clientId, clientId));
+        // Revalidate stored registrations when the deployment allowlist changes.
+        if (!row || !row.redirectUris.length || !row.redirectUris.every(approved)) return undefined;
+        return { ...row.metadata, client_id: row.clientId, redirect_uris: row.redirectUris } as OAuthClientInformationFull;
       },
-      // Public MCP clients (Claude/ChatGPT) register with token_endpoint_auth_method: "none"
-      // and carry no secret; PKCE protects the flow regardless. The full record (incl. any
-      // client_secret for confidential clients) lives in `metadata`; we do not hash it, since
-      // authenticateClient compares plaintext, so clientSecretHash stays null.
       async registerClient(client): Promise<OAuthClientInformationFull> {
         const full = client as OAuthClientInformationFull;
-        await db.insert(schema.oauthClients).values({
-          clientId: full.client_id,
-          clientSecretHash: null,
-          redirectUris: full.redirect_uris,
-          metadata: full as unknown as Record<string, unknown>,
-        });
-        return full;
+        if (full.client_id === DASHBOARD_CLIENT_ID || !full.redirect_uris.length ||
+            full.redirect_uris.length > 8 || !full.redirect_uris.every(approved) ||
+            full.token_endpoint_auth_method !== "none" ||
+            full.grant_types?.some((g) => g !== "authorization_code") ||
+            full.response_types?.some((r) => r !== "code") ||
+            (full.scope && full.scope !== "mcp")) {
+          throw new InvalidRequestError("Client registration is not approved");
+        }
+        // This single-user server supports public PKCE clients only; no other app secrets.
+        const safe: OAuthClientInformationFull = {
+          client_id: full.client_id,
+          redirect_uris: full.redirect_uris,
+          token_endpoint_auth_method: "none",
+          grant_types: ["authorization_code"], response_types: ["code"], scope: "mcp",
+          client_name: full.client_name?.slice(0, 100),
+        };
+        await db.insert(schema.oauthClients).values({ clientId: safe.client_id,
+          clientSecretHash: null, redirectUris: safe.redirect_uris,
+          metadata: safe as unknown as Record<string, unknown> });
+        return safe;
       },
     };
   }
 
-  async authorize(
-    client: OAuthClientInformationFull,
-    params: AuthorizationParams,
-    res: Response,
-  ): Promise<void> {
-    const whoopState = base64url(randomBytes(32));
-    const whoopCodeVerifier = base64url(randomBytes(32));
-
+  async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
+    const dashboard = client.client_id === DASHBOARD_CLIENT_ID;
+    const validRedirect = dashboard ? params.redirectUri === `${this.deps.publicBaseUrl}/dashboard/connected`
+      : this.approved(params.redirectUri) && client.redirect_uris.includes(params.redirectUri);
+    if (!validRedirect || !/^[A-Za-z0-9_-]{43}$/.test(params.codeChallenge) ||
+        (params.scopes ?? []).some((s) => s !== "mcp") || (params.state?.length ?? 0) > 1024) {
+      throw new InvalidRequestError("Invalid authorization request");
+    }
     const payload: PendingPayload = {
-      clientId: client.client_id,
-      clientRedirectUri: params.redirectUri,
-      clientState: params.state,
-      clientCodeChallenge: params.codeChallenge,
-      scopes: params.scopes ?? [],
-      whoopCodeVerifier,
+      stage: dashboard ? "whoop" : "consent", clientId: client.client_id,
+      clientRedirectUri: params.redirectUri, clientState: params.state,
+      clientCodeChallenge: params.codeChallenge, scopes: ["mcp"], whoopCodeVerifier: random(),
     };
+    if (dashboard) { await this.startWhoop(payload, res); return; }
 
-    await this.deps.db.insert(schema.pendingAuthorizations).values({
-      whoopState,
-      payload,
-      expiresAt: new Date(Date.now() + PENDING_TTL_MS),
-    });
-
-    const creds = await this.deps.credentials.getClientCredentials();
-    const url = buildAuthorizeUrl({
-      clientId: creds.clientId,
-      redirectUri: `${this.deps.publicBaseUrl}/whoop/callback`,
-      state: whoopState,
-      codeChallenge: pkceChallenge(whoopCodeVerifier),
-    });
-    res.redirect(302, url);
+    // WHOOP upstream consent alone is not consent to this particular MCP client.
+    const state = random();
+    const csrf = random();
+    payload.consentHash = sha256hex(csrf);
+    await this.deps.db.insert(schema.pendingAuthorizations).values({ whoopState: state, payload,
+      expiresAt: new Date(Date.now() + PENDING_TTL_MS) });
+    res.cookie(CONSENT_COOKIE, csrf, { ...cookieOptions, maxAge: PENDING_TTL_MS });
+    res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+      "Content-Security-Policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" });
+    res.type("html").send(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Approve WHOOP access</title>
+      <h1>Allow this client to read WHOOP health data?</h1>
+      <p>Client name (unverified): ${escapeHtml(client.client_name ?? "Unnamed client")}</p>
+      <p>Client ID: ${escapeHtml(client.client_id)}</p>
+      <p>Exact callback: ${escapeHtml(params.redirectUri)}</p><p>Scope: mcp. Access expires after one hour.</p>
+      <form method="post" action="/oauth/consent"><input type="hidden" name="state" value="${state}">
+      <input type="hidden" name="csrf" value="${csrf}"><button name="decision" value="allow">Allow</button>
+      <button name="decision" value="deny">Deny</button></form></html>`);
   }
 
-  async challengeForAuthorizationCode(
-    _client: OAuthClientInformationFull,
-    authorizationCode: string,
-  ): Promise<string> {
-    const [row] = await this.deps.db
-      .select()
-      .from(schema.oauthAuthCodes)
-      .where(eq(schema.oauthAuthCodes.codeHash, sha256hex(authorizationCode)));
-    if (!row) throw new InvalidGrantError("invalid or unknown authorization code");
+  consentRouter(): Router {
+    const router = Router();
+    router.post("/oauth/consent", async (req, res) => {
+      const { state, csrf, decision } = req.body ?? {};
+      const cookie = (req.headers.cookie ?? "").split(";").map((v) => v.trim())
+        .find((v) => v.startsWith(`${CONSENT_COOKIE}=`))?.slice(CONSENT_COOKIE.length + 1);
+      if (req.get("origin") !== this.deps.publicBaseUrl || typeof state !== "string" ||
+          !/^[A-Za-z0-9_-]{43}$/.test(state) || typeof csrf !== "string" ||
+          !/^[A-Za-z0-9_-]{43}$/.test(csrf) || csrf !== cookie || !["allow", "deny"].includes(decision)) {
+        res.status(403).send("Invalid consent request."); return;
+      }
+      const [pending] = await this.deps.db.select().from(schema.pendingAuthorizations)
+        .where(eq(schema.pendingAuthorizations.whoopState, state));
+      const payload = pending?.payload as PendingPayload | undefined;
+      if (!pending || pending.expiresAt.getTime() <= Date.now() || payload?.stage !== "consent" ||
+          payload.consentHash !== sha256hex(csrf) || !this.approved(payload.clientRedirectUri)) {
+        res.status(403).send("Invalid consent request."); return;
+      }
+      // One concurrent submit wins. The browser binding is checked before consumption.
+      const consumed = await this.deps.db.delete(schema.pendingAuthorizations)
+        .where(eq(schema.pendingAuthorizations.whoopState, state)).returning();
+      if (consumed.length !== 1) { res.status(403).send("Consent already used."); return; }
+      res.clearCookie(CONSENT_COOKIE, cookieOptions);
+      if (decision === "deny") {
+        const redirect = new URL(payload.clientRedirectUri);
+        redirect.searchParams.set("error", "access_denied");
+        if (payload.clientState !== undefined) redirect.searchParams.set("state", payload.clientState);
+        res.redirect(302, redirect.toString()); return;
+      }
+      await this.startWhoop({ ...payload, stage: "whoop", consentHash: undefined }, res);
+    });
+    return router;
+  }
+
+  private async startWhoop(payload: PendingPayload, res: Response): Promise<void> {
+    const whoopState = random();
+    await this.deps.db.insert(schema.pendingAuthorizations).values({ whoopState, payload,
+      expiresAt: new Date(Date.now() + PENDING_TTL_MS) });
+    const creds = await this.deps.credentials.getClientCredentials();
+    res.redirect(302, buildAuthorizeUrl({ clientId: creds.clientId,
+      redirectUri: `${this.deps.publicBaseUrl}/whoop/callback`, state: whoopState,
+      codeChallenge: pkceChallenge(payload.whoopCodeVerifier) }));
+  }
+
+  async challengeForAuthorizationCode(client: OAuthClientInformationFull, code: string): Promise<string> {
+    const [row] = await this.deps.db.select().from(schema.oauthAuthCodes)
+      .where(eq(schema.oauthAuthCodes.codeHash, sha256hex(code)));
+    if (!row || row.clientId !== client.client_id || row.expiresAt.getTime() <= Date.now()) {
+      throw new InvalidGrantError("Invalid authorization code");
+    }
     return row.codeChallenge;
   }
 
-  async exchangeAuthorizationCode(
-    client: OAuthClientInformationFull,
-    authorizationCode: string,
-    _codeVerifier?: string,
-    redirectUri?: string,
-  ): Promise<OAuthTokens> {
-    const codeHash = sha256hex(authorizationCode);
-    const [row] = await this.deps.db
-      .select()
-      .from(schema.oauthAuthCodes)
-      .where(eq(schema.oauthAuthCodes.codeHash, codeHash));
-    if (!row) throw new InvalidGrantError("invalid or unknown authorization code");
-    // Single-use: delete regardless of outcome below.
-    await this.deps.db
-      .delete(schema.oauthAuthCodes)
-      .where(eq(schema.oauthAuthCodes.codeHash, codeHash));
-    if (row.clientId !== client.client_id) throw new InvalidGrantError("authorization code was issued to a different client");
-    // RFC 6749 §4.1.3: when the token request presents a redirect_uri, it MUST match the one
-    // bound to the code at authorization time. The SDK's dashboard path omits it (server-internal,
-    // same-origin), so we only enforce when a redirect_uri is actually supplied.
-    if (redirectUri !== undefined && redirectUri !== row.redirectUri) {
-      throw new InvalidGrantError("redirect_uri does not match the authorization request");
+  async exchangeAuthorizationCode(client: OAuthClientInformationFull, code: string,
+    codeVerifier?: string, redirectUri?: string): Promise<OAuthTokens> {
+    // DELETE RETURNING is atomic: parallel redemptions cannot both mint a token.
+    const [row] = await this.deps.db.delete(schema.oauthAuthCodes)
+      .where(eq(schema.oauthAuthCodes.codeHash, sha256hex(code))).returning();
+    if (!row || row.clientId !== client.client_id || row.expiresAt.getTime() <= Date.now() ||
+        !codeVerifier || !/^[A-Za-z0-9._~-]{43,128}$/.test(codeVerifier) ||
+        pkceChallenge(codeVerifier) !== row.codeChallenge) {
+      throw new InvalidGrantError("Invalid authorization code or PKCE verifier");
     }
-    if (row.expiresAt.getTime() < Date.now()) throw new InvalidGrantError("authorization code expired");
-
-    const accessToken = await this.deps.tokenStore.issueMcpToken(row.userId, "oauth");
-    return { access_token: accessToken, token_type: "bearer" };
+    if (redirectUri !== undefined && redirectUri !== row.redirectUri) throw new InvalidGrantError("redirect_uri does not match");
+    if (client.client_id !== DASHBOARD_CLIENT_ID && !this.approved(row.redirectUri)) {
+      throw new InvalidGrantError("Callback no longer approved");
+    }
+    const accessToken = await this.deps.tokenStore.issueMcpToken(row.userId, "oauth", undefined, client.client_id);
+    return { access_token: accessToken, token_type: "bearer", expires_in: OAUTH_TOKEN_TTL_SECONDS, scope: "mcp" };
   }
 
   async exchangeRefreshToken(): Promise<OAuthTokens> {
     throw new UnsupportedGrantTypeError("refresh_token grant is not supported");
   }
-
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     const r = await this.deps.tokenStore.resolveMcpToken(token);
-    if (!r) throw new InvalidTokenError("invalid or revoked token");
-    return {
-      token,
-      clientId: "mcp",
-      scopes: ["mcp"],
-      expiresAt: Math.floor(Date.now() / 1000) + ACCESS_TOKEN_TTL_SECONDS,
-      extra: { userId: r.userId },
-    };
+    if (!r) throw new InvalidTokenError("Invalid, expired or revoked token");
+    return { token, clientId: r.clientId, scopes: ["mcp"],
+      expiresAt: Math.floor(r.expiresAt.getTime() / 1000), extra: { userId: r.userId } };
   }
 }

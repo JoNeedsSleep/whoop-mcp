@@ -134,3 +134,11 @@ describe("dashboard API", () => {
     expect(updateMcpTokenLabel).toHaveBeenCalledWith("u1", "h1", null);
   });
 });
+
+it("revoke-all covers OAuth and personal tokens through the store", async () => {
+  const revokeAllMcpTokens = vi.fn(async () => {});
+  const r = await request(appWith({ revokeAllMcpTokens }, "u1"))
+    .delete("/api/tokens").set("X-Requested-With", "fetch");
+  expect(r.status).toBe(204);
+  expect(revokeAllMcpTokens).toHaveBeenCalledWith("u1");
+});

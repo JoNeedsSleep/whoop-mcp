@@ -17,16 +17,15 @@ export interface CallbackDeps {
   tokenStore: TokenStore;
   credentials: CredentialProvider;
   publicBaseUrl: string;
-  restrictAccess: boolean;
-  allowedWhoopEmails: string[];
+  allowedWhoopUserId: string;
+  approvedClientRedirectUris: string[];
   fetchImpl?: FetchImpl;
 }
 
-// Access gate for self-hosters. When restrict is false the server is open to anyone;
-// when true, the WHOOP account's email must be in the allowlist (case-insensitive).
-export function isWhoopEmailAllowed(email: string | null, allowlist: string[], restrict: boolean): boolean {
-  if (!restrict) return true;
-  return email != null && allowlist.includes(email.toLowerCase());
+// Stable numeric identity, never email or trust-on-first-use enrollment.
+export function isWhoopUserAllowed(value: unknown, expected: string): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 &&
+    /^[1-9][0-9]{0,15}$/.test(expected) && String(value) === expected;
 }
 
 const sha256hex = (raw: string) => createHash("sha256").update(raw).digest("hex");
@@ -45,30 +44,29 @@ export function createWhoopCallbackRouter(deps: CallbackDeps): Router {
       res.status(400).send("WHOOP authorization failed.");
       return;
     }
-    if (!state || !code) {
+    if (!state || !/^[A-Za-z0-9_-]{43}$/.test(state) || !code || code.length > 2048) {
       res.status(400).send("Missing state or code.");
       return;
     }
 
     const [pending] = await deps.db
-      .select()
-      .from(schema.pendingAuthorizations)
-      .where(eq(schema.pendingAuthorizations.whoopState, state));
+      .delete(schema.pendingAuthorizations)
+      .where(eq(schema.pendingAuthorizations.whoopState, state)).returning();
 
-    if (!pending || pending.expiresAt.getTime() < Date.now()) {
+    if (!pending || pending.expiresAt.getTime() <= Date.now()) {
       res.status(400).send("Unknown or expired authorization request.");
       return;
     }
 
-    // Single-use pending record.
-    await deps.db
-      .delete(schema.pendingAuthorizations)
-      .where(eq(schema.pendingAuthorizations.whoopState, state));
-
     const payload = pending.payload as PendingPayload;
+    const approved = payload.clientId === "whoop-mcp-dashboard"
+      ? payload.clientRedirectUri === `${deps.publicBaseUrl}/dashboard/connected`
+      : deps.approvedClientRedirectUris.includes(payload.clientRedirectUri);
+    if (payload.stage !== "whoop" || !approved) {
+      res.status(400).send("Invalid authorization request."); return;
+    }
 
-    // Express 4 does not catch async rejections; exchangeCodeForTokens/getProfile throw on
-    // WHOOP or network failure, so catch here to avoid a hung request. Never log token/code values.
+    // Convert upstream failures to a fixed response. Never log token/code values.
     try {
       const creds = await deps.credentials.getClientCredentials();
       const redirectUri = `${deps.publicBaseUrl}/whoop/callback`;
@@ -90,14 +88,13 @@ export function createWhoopCallbackRouter(deps: CallbackDeps): Router {
       );
       const profile = await client.getProfile();
       const whoopUserId = String(profile.user_id);
-      const email = typeof profile.email === "string" ? profile.email : null;
 
-      if (!isWhoopEmailAllowed(email, deps.allowedWhoopEmails, deps.restrictAccess)) {
+      if (!isWhoopUserAllowed(profile.user_id, deps.allowedWhoopUserId)) {
         res.status(403).send("This WHOOP account is not allowed on this server.");
         return;
       }
 
-      const userId = await deps.tokenStore.upsertUserAndTokens(whoopUserId, email, tokenSet);
+      const userId = await deps.tokenStore.upsertUserAndTokens(whoopUserId, null, tokenSet);
 
       // Mint OUR authorization code, bound to the user + the client's PKCE challenge.
       const ourCode = randomBytes(32).toString("base64url");

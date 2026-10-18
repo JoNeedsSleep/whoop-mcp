@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { WhoopClient } from "../whoop/client.js";
 
-const RangeSchema = { start: z.string().optional(), end: z.string().optional(), limit: z.number().int().min(1).max(50).optional() };
+const RangeSchema = { start: z.iso.datetime().optional(), end: z.iso.datetime().optional(), limit: z.number().int().min(1).max(50).optional() };
 type ClientFactory = (userId: string) => WhoopClient;
 
 function ok(data: unknown) {
@@ -10,7 +10,7 @@ function ok(data: unknown) {
 function fail(e: unknown) {
   const msg = e instanceof Error && /not connected|reconnect/i.test(e.message)
     ? "Your WHOOP account isn't connected. Open the dashboard to connect it."
-    : `WHOOP request failed: ${(e as Error).message}`;
+    : "WHOOP request failed.";
   return { content: [{ type: "text" as const, text: msg }], isError: true };
 }
 
@@ -24,8 +24,6 @@ export function makeToolHandlers(clientFor: ClientFactory) {
     get_sleep: wrap((c, a) => c.getSleep({ start: a.start, end: a.end, limit: a.limit }).then((r) => ({ records: r }))),
     get_workouts: wrap((c, a) => c.getWorkouts({ start: a.start, end: a.end, limit: a.limit }).then((r) => ({ records: r }))),
     get_cycles: wrap((c, a) => c.getCycles({ start: a.start, end: a.end, limit: a.limit }).then((r) => ({ records: r }))),
-    get_profile: wrap((c) => c.getProfile()),
-    get_body_measurement: wrap((c) => c.getBodyMeasurement()),
     get_daily_summary: wrap(async (c, a) => {
       const start = `${a.date}T00:00:00.000Z`;
       const end = new Date(new Date(start).getTime() + 86_400_000).toISOString();

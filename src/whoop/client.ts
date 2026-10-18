@@ -13,7 +13,7 @@ export class WhoopClient {
     const at = token ?? await this.getAccessToken();
     const url = new URL(API_BASE + path);
     for (const [k, v] of Object.entries(query)) if (v != null) url.searchParams.set(k, v);
-    return this.fetchImpl(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
+    return this.fetchImpl(url.toString(), { headers: { Authorization: `Bearer ${at}` }, redirect: "error", signal: AbortSignal.timeout(10_000) });
   }
 
   private async json<T>(path: string, query: Record<string, string> = {}): Promise<T> {
@@ -36,7 +36,9 @@ export class WhoopClient {
     const out: any[] = [];
     let nextToken: string | undefined;
     const limit = range.limit ?? 25;
+    let pages = 0;
     do {
+      if (++pages > 4) throw new Error("WHOOP pagination limit exceeded");
       const q: Record<string, string> = { limit: String(Math.min(limit, 25)) };
       if (range.start) q.start = range.start;
       if (range.end) q.end = range.end;

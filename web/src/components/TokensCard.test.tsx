@@ -7,6 +7,8 @@ const sampleToken = {
   label: "My laptop",
   createdAt: "2026-01-01T00:00:00.000Z",
   lastUsedAt: null,
+  type: "oauth",
+  expiresAt: "2026-01-01T01:00:00.000Z",
 };
 
 beforeEach(() => {

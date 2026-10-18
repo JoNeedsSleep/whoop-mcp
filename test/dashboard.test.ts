@@ -14,7 +14,7 @@ describe("dashboard", () => {
       createDashboardRouter({
         provider: { exchangeAuthorizationCode, verifyAccessToken: vi.fn() } as any,
         tokenStore: { issueMcpToken: vi.fn(), revokeMcpToken: vi.fn(), deleteUser: vi.fn() } as any,
-        sessionSecret: "test-session-secret-1234567890",
+        publicBaseUrl: "https://mcp.example.com", sessionSecret: "test-session-secret-1234567890",
       }),
     );
     // No prior /connect -> the session carries no oauthState, so a forged callback is rejected
@@ -30,7 +30,7 @@ describe("dashboard", () => {
     const a = express();
     a.use(
       "/dashboard",
-      createDashboardRouter({ provider: {} as any, tokenStore: {} as any, sessionSecret: "x".repeat(20), webDistDir: dist }),
+      createDashboardRouter({ provider: {} as any, tokenStore: {} as any, publicBaseUrl: "https://mcp.example.com", sessionSecret: "x".repeat(20), webDistDir: dist }),
     );
     const r = await request(a).get("/dashboard/");
     expect(r.status).toBe(200);
@@ -47,7 +47,7 @@ describe("dashboard", () => {
       createDashboardRouter({
         provider: {} as any,
         tokenStore: { issueMcpToken: vi.fn(), revokeMcpToken: vi.fn(), deleteUser: vi.fn() } as any,
-        sessionSecret: "x".repeat(20),
+        publicBaseUrl: "https://mcp.example.com", sessionSecret: "x".repeat(20),
         webDistDir: dist,
       }),
     );
@@ -57,4 +57,19 @@ describe("dashboard", () => {
     expect(r.body).toEqual({ connected: false });
     fs.rmSync(dist, { recursive: true, force: true });
   });
+});
+
+it("ignores hostile Host/protocol when constructing callback and uses secure host-only cookies", async () => {
+  const authorize = vi.fn(async (_client, _params, res) => res.redirect("https://whoop.example"));
+  const a = express();
+  a.set("trust proxy", "loopback");
+  a.use("/dashboard", createDashboardRouter({ provider: { authorize } as any, tokenStore: {} as any,
+    sessionSecret: "s".repeat(32), publicBaseUrl: "https://mcp.example.com" }));
+  const r = await request(a).get("/dashboard/connect").set("Host", "evil.example").set("X-Forwarded-Proto", "https");
+  expect(authorize.mock.calls[0][1].redirectUri).toBe("https://mcp.example.com/dashboard/connected");
+  const cookies = r.headers["set-cookie"].join(";");
+  expect(cookies).toContain("__Host-whoop_dashboard_session");
+  expect(cookies).toContain("Secure");
+  expect(cookies).toContain("HttpOnly");
+  expect(cookies).not.toMatch(/Domain=/i);
 });

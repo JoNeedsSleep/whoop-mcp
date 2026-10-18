@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import express, { Router, type Request, type Response } from "express";
 import cookieSession from "cookie-session";
@@ -11,6 +11,7 @@ export interface DashboardDeps {
   provider: OAuthServerProvider;
   tokenStore: TokenStore;
   sessionSecret: string;
+  publicBaseUrl: string;
   webDistDir?: string;
 }
 
@@ -18,10 +19,6 @@ export interface DashboardDeps {
 // registered MCP clients (whose client_id values are CSPRNG-random) — this id is never
 // registered in oauthClients, so it can never collide with one.
 const DASHBOARD_CLIENT_ID = "whoop-mcp-dashboard";
-
-function connectedRedirectUri(req: Request): string {
-  return `${req.protocol}://${req.get("host")}${req.baseUrl}/connected`;
-}
 
 function dashboardClient(redirectUri: string): OAuthClientInformationFull {
   return { client_id: DASHBOARD_CLIENT_ID, redirect_uris: [redirectUri] } as OAuthClientInformationFull;
@@ -31,11 +28,13 @@ export function createDashboardRouter(deps: DashboardDeps): Router {
   const router = Router();
   router.use(
     cookieSession({
-      name: "whoop_dashboard_session",
+      name: "__Host-whoop_dashboard_session",
       secret: deps.sessionSecret,
       httpOnly: true,
+      secure: true,
+      path: "/",
       sameSite: "lax",
-      maxAge: 30 * 24 * 60 * 60 * 1000,
+      maxAge: 8 * 60 * 60 * 1000,
     }),
   );
   router.use(express.urlencoded({ extended: false }));
@@ -45,15 +44,17 @@ export function createDashboardRouter(deps: DashboardDeps): Router {
   // client id standing in for a real registered MCP client.
   router.get("/connect", async (req: Request, res: Response) => {
     try {
-      const redirectUri = connectedRedirectUri(req);
+      const redirectUri = `${deps.publicBaseUrl}/dashboard/connected`;
       // CSRF/login-fixation guard: bind this login attempt to the initiating browser session.
       // The state travels through WHOOP and back to /connected, where it must match what we
       // stored here. An attacker's captured code carries a state the victim's session lacks.
       const oauthState = randomBytes(32).toString("base64url");
-      if (req.session) req.session.oauthState = oauthState;
+      const verifier = randomBytes(32).toString("base64url");
+      const challenge = createHash("sha256").update(verifier).digest("base64url");
+      if (req.session) { req.session.oauthState = oauthState; req.session.pkceVerifier = verifier; }
       await deps.provider.authorize(
         dashboardClient(redirectUri),
-        { redirectUri, state: oauthState, codeChallenge: "unused" },
+        { redirectUri, state: oauthState, codeChallenge: challenge, scopes: ["mcp"] },
         res,
       );
     } catch {
@@ -79,23 +80,32 @@ export function createDashboardRouter(deps: DashboardDeps): Router {
       res.status(403).send("Invalid or missing state.");
       return;
     }
-    if (req.session) req.session.oauthState = undefined; // one-time use
+    const verifier = req.session?.pkceVerifier as string | undefined;
+    if (req.session) { req.session.oauthState = undefined; req.session.pkceVerifier = undefined; }
     try {
-      const redirectUri = connectedRedirectUri(req);
-      const tokens = await deps.provider.exchangeAuthorizationCode(dashboardClient(redirectUri), code);
+      const redirectUri = `${deps.publicBaseUrl}/dashboard/connected`;
+      const tokens = await deps.provider.exchangeAuthorizationCode(dashboardClient(redirectUri), code, verifier, redirectUri);
       const authInfo = await deps.provider.verifyAccessToken(tokens.access_token);
+      await deps.tokenStore.revokeMcpToken(tokens.access_token);
       const userId = authInfo.extra?.userId;
       if (typeof userId !== "string" || !req.session) {
         res.status(502).send("WHOOP connection failed, please try again.");
         return;
       }
-      req.session.userId = userId;
-      res.redirect(302, req.baseUrl || "/");
+      req.session = { userId, expiresAt: Date.now() + 8 * 60 * 60 * 1000 };
+      res.redirect(302, `${deps.publicBaseUrl}/dashboard`);
     } catch {
       res.status(502).send("WHOOP connection failed, please try again.");
     }
   });
 
+  router.use(async (req, _res, next) => {
+    if (req.session?.userId && (typeof req.session.expiresAt !== "number" || req.session.expiresAt <= Date.now())) {
+      req.session = null;
+    }
+    if (typeof req.session?.userId === "string" && !await deps.tokenStore.isAllowedUser(req.session.userId)) req.session = null;
+    next();
+  });
   router.use("/api", createDashboardApiRouter({ tokenStore: deps.tokenStore }));
 
   // Serves the built shadcn SPA (Task 4). Registered after /connect, /connected, and /api,

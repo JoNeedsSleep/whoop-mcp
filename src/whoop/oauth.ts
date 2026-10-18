@@ -6,8 +6,7 @@ export const WHOOP_SCOPES = [
   "read:sleep",
   "read:workout",
   "read:cycles",
-  "read:profile",
-  "read:body_measurement",
+  "read:profile", // required for fail-closed identity check; WHOOP also exposes email with this scope
   "offline",
 ];
 type Creds = { clientId: string; clientSecret: string };
@@ -44,6 +43,8 @@ async function tokenRequest(body: URLSearchParams, fetchImpl: FetchImpl): Promis
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`WHOOP token endpoint ${res.status}`);
   return parseTokenResponse(await res.json());

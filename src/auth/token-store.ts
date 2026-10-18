@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, gt } from "drizzle-orm";
 import { encrypt, decrypt } from "../crypto.js";
 import { schema } from "../db/client.js";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -9,16 +9,26 @@ export type RefreshFn = (refreshToken: string) => Promise<WhoopTokenSet>;
 type Db = NodePgDatabase<typeof schema>;
 const hashToken = (raw: string) => createHash("sha256").update(raw).digest("hex");
 const EXPIRY_SKEW_MS = 60_000;
+export const OAUTH_TOKEN_TTL_SECONDS = 3600;
+export const PAT_TOKEN_TTL_SECONDS = 7 * 24 * 3600;
 
 export interface TokenSummary {
   id: string;
   label: string | null;
   createdAt: string;
   lastUsedAt: string | null;
+  expiresAt: string;
+  type: "oauth" | "pat";
 }
 
 export class TokenStore {
-  constructor(private db: Db, private keyHex: string, private refresh: RefreshFn) {}
+  constructor(private db: Db, private keyHex: string, private refresh: RefreshFn, private allowedWhoopUserId?: string) {}
+
+  async isAllowedUser(userId: string): Promise<boolean> {
+    if (!this.allowedWhoopUserId) return false;
+    const [user] = await this.db.select().from(schema.users).where(eq(schema.users.id, userId));
+    return user?.whoopUserId === this.allowedWhoopUserId;
+  }
 
   async upsertUserAndTokens(whoopUserId: string, email: string | null, t: WhoopTokenSet): Promise<string> {
     // Atomic: the user row and its token row must appear together. Without the transaction,
@@ -73,19 +83,23 @@ export class TokenStore {
     return refreshed.accessToken;
   }
 
-  async issueMcpToken(userId: string, type: "oauth" | "pat", label?: string): Promise<string> {
+  async issueMcpToken(userId: string, type: "oauth" | "pat", label?: string, clientId?: string): Promise<string> {
+    if (this.allowedWhoopUserId && !await this.isAllowedUser(userId)) throw new Error("Account not allowed");
     const raw = `whoopmcp_${type}_${randomBytes(32).toString("base64url")}`;
-    await this.db.insert(schema.mcpTokens).values({ tokenHash: hashToken(raw), userId, type, label });
+    const ttl = type === "oauth" ? OAUTH_TOKEN_TTL_SECONDS : PAT_TOKEN_TTL_SECONDS;
+    await this.db.insert(schema.mcpTokens).values({ tokenHash: hashToken(raw), userId, type, label,
+      clientId: clientId ?? null, expiresAt: new Date(Date.now() + ttl * 1000) });
     return raw;
   }
 
-  async resolveMcpToken(raw: string): Promise<{ userId: string } | null> {
+  async resolveMcpToken(raw: string): Promise<{ userId: string; clientId: string; expiresAt: Date } | null> {
     const [row] = await this.db.select().from(schema.mcpTokens)
       .where(eq(schema.mcpTokens.tokenHash, hashToken(raw)));
-    if (!row || row.revokedAt) return null;
+    if (!row || row.revokedAt || !row.expiresAt || row.expiresAt.getTime() <= Date.now()) return null;
+    if (this.allowedWhoopUserId && !await this.isAllowedUser(row.userId)) return null;
     await this.db.update(schema.mcpTokens).set({ lastUsedAt: new Date() })
       .where(eq(schema.mcpTokens.tokenHash, row.tokenHash));
-    return { userId: row.userId };
+    return { userId: row.userId, clientId: row.clientId ?? "pat", expiresAt: row.expiresAt };
   }
 
   async revokeMcpToken(raw: string): Promise<void> {
@@ -97,12 +111,14 @@ export class TokenStore {
     const rows = await this.db.select().from(schema.mcpTokens)
       .where(and(
         eq(schema.mcpTokens.userId, userId),
-        eq(schema.mcpTokens.type, "pat"),
+        gt(schema.mcpTokens.expiresAt, new Date()),
         isNull(schema.mcpTokens.revokedAt),
       ))
       .orderBy(desc(schema.mcpTokens.createdAt));
     return rows.map((r) => ({
       id: r.tokenHash,
+      type: r.type,
+      expiresAt: r.expiresAt.toISOString(),
       label: r.label,
       createdAt: r.createdAt.toISOString(),
       lastUsedAt: r.lastUsedAt ? r.lastUsedAt.toISOString() : null,
@@ -123,6 +139,14 @@ export class TokenStore {
         eq(schema.mcpTokens.tokenHash, tokenHash),
         eq(schema.mcpTokens.userId, userId),
       ));
+  }
+
+  async revokeAllMcpTokens(userId: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await tx.update(schema.mcpTokens).set({ revokedAt: new Date() })
+        .where(eq(schema.mcpTokens.userId, userId));
+      await tx.delete(schema.oauthAuthCodes).where(eq(schema.oauthAuthCodes.userId, userId));
+    });
   }
 
   async deleteUser(userId: string): Promise<void> {

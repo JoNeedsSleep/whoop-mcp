@@ -11,13 +11,15 @@ function fakeClient(): WhoopClient {
 }
 
 describe("registerWhoopTools", () => {
-  it("registers the 7 WHOOP tools on the server", () => {
+  it("registers only the 5 WHOOP tools on the server", () => {
     const server = new McpServer({ name: "t", version: "0" });
     registerWhoopTools(server, () => fakeClient(), () => "local");
     // McpServer keeps registered tools; assert the known names are present.
     const names = Object.keys((server as any)._registeredTools ?? {});
-    for (const n of ["get_recovery","get_sleep","get_workouts","get_cycles","get_profile","get_body_measurement","get_daily_summary"]) {
+    for (const n of ["get_recovery","get_sleep","get_workouts","get_cycles","get_daily_summary"]) {
       expect(names).toContain(n);
     }
+    expect(names).not.toContain("get_profile");
+    expect(names).not.toContain("get_body_measurement");
   });
 });

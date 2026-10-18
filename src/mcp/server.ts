@@ -19,8 +19,6 @@ export function registerWhoopTools(
   reg("get_sleep", "Get WHOOP sleep records (stages, performance, respiratory rate).", RANGE_SCHEMA, h.get_sleep);
   reg("get_workouts", "Get WHOOP workouts (strain, HR zones, distance).", RANGE_SCHEMA, h.get_workouts);
   reg("get_cycles", "Get WHOOP physiological cycles (daily strain, energy).", RANGE_SCHEMA, h.get_cycles);
-  reg("get_profile", "Get the user's WHOOP profile (name, email).", {}, h.get_profile);
-  reg("get_body_measurement", "Get body measurements (height, weight, max HR).", {}, h.get_body_measurement);
   reg("get_daily_summary", "Get combined recovery + sleep + strain for a single date (YYYY-MM-DD).",
     { date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD") }, h.get_daily_summary);
 }

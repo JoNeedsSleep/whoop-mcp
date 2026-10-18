@@ -2,16 +2,12 @@ import { loadConfig } from "./config.js";
 import { createApp } from "./app.js";
 import { runMigrations } from "./migrate.js";
 
-const config = loadConfig(process.env);
-if (config.restrictAccess && config.allowedWhoopEmails.length === 0) {
-  console.warn("⚠️  RESTRICT_ACCESS is on but ALLOWED_WHOOP_EMAILS is empty — no one can connect.");
-} else if (!config.restrictAccess && config.allowedWhoopEmails.length > 0) {
-  console.warn("⚠️  ALLOWED_WHOOP_EMAILS is set but RESTRICT_ACCESS is not true — the server is still open to anyone.");
-}
+// Never print validation inputs, database errors, URLs or secrets on startup failure.
 try {
+  const config = loadConfig(process.env);
   await runMigrations(config.databaseUrl);
-} catch (e) {
-  console.error("migration failed at startup:", e);
+  createApp(config).listen(config.port, () => console.log("WHOOP service listening"));
+} catch {
+  console.error("WHOOP service startup failed; check configuration and database availability.");
   process.exit(1);
 }
-createApp(config).listen(config.port, () => console.log(`listening on ${config.port}`));

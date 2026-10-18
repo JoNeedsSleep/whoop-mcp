@@ -23,6 +23,8 @@ export const mcpTokens = pgTable("mcp_tokens", {
   type: text("type", { enum: ["oauth", "pat"] }).notNull(),
   label: text("label"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  clientId: text("client_id"),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
 });

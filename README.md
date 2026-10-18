@@ -1,3 +1,5 @@
+> **Security review branch — not deployment-ready.** This fork now requires a single WHOOP identity, explicit HTTPS origin and approved callbacks. The upstream deployment instructions below do not describe the hardened branch. Read [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for the changes, untested checks, scope limits and separately trusted gateway design before installation or account connection. Do not use the one-click deployment steps for this review draft.
+
 # WHOOP MCP Server
 
 A multi-user [MCP](https://modelcontextprotocol.io) server that exposes WHOOP

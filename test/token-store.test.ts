@@ -155,14 +155,14 @@ describe("TokenStore.listMcpTokens / revokeMcpTokenById (fake db)", () => {
   it("listMcpTokens maps rows to TokenSummary (id = tokenHash, ISO dates)", async () => {
     const created = new Date("2026-08-01T10:00:00.000Z");
     const rows = [
-      { tokenHash: "h1", userId: "u1", type: "pat", label: "cli", createdAt: created, lastUsedAt: null, revokedAt: null },
+      { tokenHash: "h1", userId: "u1", type: "pat", label: "cli", createdAt: created, expiresAt: created, lastUsedAt: null, revokedAt: null },
     ];
     const db = {
       select: () => ({ from: () => ({ where: () => ({ orderBy: async () => rows }) }) }),
     };
     const store = new TokenStore(db as any, key, vi.fn());
     const out = await store.listMcpTokens("u1");
-    expect(out).toEqual([{ id: "h1", label: "cli", createdAt: created.toISOString(), lastUsedAt: null }]);
+    expect(out).toEqual([{ id: "h1", label: "cli", createdAt: created.toISOString(), expiresAt: created.toISOString(), type: "pat", lastUsedAt: null }]);
   });
 
   it("revokeMcpTokenById issues a scoped update (userId + tokenHash) setting revokedAt", async () => {
@@ -238,7 +238,7 @@ describe.skipIf(!url)("TokenStore integration (real db)", () => {
 
     const raw = await store.issueMcpToken(userId, "pat", "test token");
     const resolved = await store.resolveMcpToken(raw);
-    expect(resolved).toEqual({ userId });
+    expect(resolved).toMatchObject({ userId });
 
     await store.revokeMcpToken(raw);
     const afterRevoke = await store.resolveMcpToken(raw);
@@ -269,7 +269,7 @@ describe.skipIf(!url)("TokenStore integration (real db)", () => {
     });
 
     const rawB = await store.issueMcpToken(userBId, "pat");
-    expect(await store.resolveMcpToken(rawB)).toEqual({ userId: userBId });
+    expect(await store.resolveMcpToken(rawB)).toMatchObject({ userId: userBId });
 
     const tokensB = await store.listMcpTokens(userBId);
     expect(tokensB).toHaveLength(1);
@@ -277,7 +277,7 @@ describe.skipIf(!url)("TokenStore integration (real db)", () => {
 
     // User A attempts to revoke user B's token by id: must be a no-op.
     await store.revokeMcpTokenById(userAId, tokenBHash);
-    expect(await store.resolveMcpToken(rawB)).toEqual({ userId: userBId });
+    expect(await store.resolveMcpToken(rawB)).toMatchObject({ userId: userBId });
 
     // Positive control: user B revoking their own token does work.
     await store.revokeMcpTokenById(userBId, tokenBHash);
@@ -324,5 +324,31 @@ describe.skipIf(!url)("TokenStore integration (real db)", () => {
 
     await store.deleteUser(userAId);
     await store.deleteUser(userBId);
+  });
+});
+
+describe("fixed bearer lifetime (fake db)", () => {
+  it("does not resolve expired, missing-expiry or revoked credentials", async () => {
+    for (const row of [
+      { userId: "u", expiresAt: new Date(0), revokedAt: null },
+      { userId: "u", expiresAt: undefined, revokedAt: null },
+      { userId: "u", expiresAt: new Date(Date.now() + 10000), revokedAt: new Date() },
+    ]) {
+      const update = vi.fn();
+      const db = { select: () => ({ from: () => ({ where: async () => [row] }) }), update };
+      expect(await new TokenStore(db as any, key, vi.fn()).resolveMcpToken("expired")).toBeNull();
+      expect(update).not.toHaveBeenCalled();
+    }
+  });
+  it("issues one-hour OAuth and seven-day PAT credentials with stored expiry", async () => {
+    const values = vi.fn(async (_row: any) => {});
+    const store = new TokenStore({ insert: () => ({ values }) } as any, key, vi.fn());
+    const before = Date.now();
+    await store.issueMcpToken("u", "oauth", undefined, "client-1");
+    await store.issueMcpToken("u", "pat");
+    expect(values.mock.calls[0][0].expiresAt.getTime() - before).toBeGreaterThanOrEqual(3600000);
+    expect(values.mock.calls[0][0].expiresAt.getTime() - before).toBeLessThan(3601000);
+    expect(values.mock.calls[1][0].expiresAt.getTime() - before).toBeGreaterThanOrEqual(7 * 86400000);
+    expect(values.mock.calls[0][0].clientId).toBe("client-1");
   });
 });
