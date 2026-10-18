@@ -97,3 +97,52 @@ it("applies global pending-state admission to dashboard login regardless of forw
   expect(insert).not.toHaveBeenCalled();
   expect(getClientCredentials).not.toHaveBeenCalled();
 });
+
+it("keeps a completed login for seven days and rejects replay at its fixed deadline", async () => {
+  const start = Date.UTC(2026, 9, 18, 12);
+  const week = 7 * 86400000;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(start);
+    let state = "";
+    const provider = {
+      authorize: vi.fn(async (_client, params, res) => { state = params.state; res.redirect("https://whoop.example"); }),
+      exchangeAuthorizationCode: vi.fn(async () => ({ access_token: "temporary-login-token" })),
+      verifyAccessToken: vi.fn(async () => ({ extra: { userId: "u1" } })),
+    };
+    const revokeMcpToken = vi.fn(async () => {});
+    const isAllowedUser = vi.fn(async () => true);
+    const app = express(); app.set("trust proxy", "loopback");
+    app.use("/dashboard", createDashboardRouter({ provider: provider as any,
+      tokenStore: { revokeMcpToken, isAllowedUser } as any,
+      sessionSecret: "s".repeat(32), publicBaseUrl: "https://mcp.example.com" }));
+    const cookies = (response: request.Response) => (response.headers["set-cookie"] as unknown as string[])
+      .map((cookie) => cookie.split(";", 1)[0]).join("; ");
+    const begun = await request(app).get("/dashboard/connect").set("X-Forwarded-Proto", "https");
+    const completed = await request(app).get("/dashboard/connected").query({ code: "code", state })
+      .set("X-Forwarded-Proto", "https").set("Cookie", cookies(begun));
+    expect(completed.status).toBe(302);
+    expect(revokeMcpToken).toHaveBeenCalledWith("temporary-login-token");
+    const cookie = cookies(completed);
+    const headers = completed.headers["set-cookie"] as unknown as string[];
+    for (const header of headers) {
+      expect(new Date(/expires=([^;]+)/i.exec(header)![1]).getTime()).toBe(start + week);
+      expect(header).toMatch(/;\s*secure(?:;|$)/i);
+      expect(header).toMatch(/;\s*httponly(?:;|$)/i);
+    }
+    for (const offset of [86400000, week - 1]) {
+      vi.setSystemTime(start + offset);
+      const session = await request(app).get("/dashboard/api/session")
+        .set("X-Forwarded-Proto", "https").set("Cookie", cookie);
+      expect(session.body).toEqual({ connected: true });
+      expect(session.headers["set-cookie"]).toBeUndefined();
+    }
+    vi.setSystemTime(start + week);
+    // Replay the signed cookie even though a browser would have discarded it.
+    const expired = await request(app).get("/dashboard/api/session")
+      .set("X-Forwarded-Proto", "https").set("Cookie", cookie);
+    expect(expired.body).toEqual({ connected: false });
+    expect(isAllowedUser).toHaveBeenCalledTimes(2);
+    expect(provider.exchangeAuthorizationCode).toHaveBeenCalledTimes(1);
+  } finally { vi.useRealTimers(); }
+});

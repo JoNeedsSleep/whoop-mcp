@@ -195,7 +195,7 @@ export function TokensCard({ onUnauthorized }: { onUnauthorized: () => void }) {
       <Card>
         <CardHeader>
           <CardTitle>Access tokens</CardTitle>
-          <CardDescription>OAuth access lasts one hour; personal tokens last seven days. Both can be revoked here.</CardDescription>
+          <CardDescription>You stay signed in for seven days. Assistant access and personal tokens also last seven days and can be revoked here.</CardDescription>
           <CardAction>
             <div className="flex gap-2">
               <Input

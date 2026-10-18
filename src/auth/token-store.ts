@@ -11,7 +11,7 @@ type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
 export type AuthorizationCode = typeof schema.oauthAuthCodes.$inferSelect;
 const hashToken = (raw: string) => createHash("sha256").update(raw).digest("hex");
 const EXPIRY_SKEW_MS = 60_000;
-export const OAUTH_TOKEN_TTL_SECONDS = 3600;
+export const OAUTH_TOKEN_TTL_SECONDS = 7 * 24 * 3600;
 export const PAT_TOKEN_TTL_SECONDS = 7 * 24 * 3600;
 
 export interface TokenSummary {

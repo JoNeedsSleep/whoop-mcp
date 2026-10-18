@@ -28,7 +28,7 @@ describe("authorization code redemption", () => {
     const results = await Promise.allSettled([p.exchangeAuthorizationCode(client, "code", verifier, uri), p.exchangeAuthorizationCode(client, "code", verifier, uri)]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(issueMcpToken).toHaveBeenCalledTimes(1);
-    expect((results.find((r) => r.status === "fulfilled") as any).value.expires_in).toBe(3600);
+    expect((results.find((r) => r.status === "fulfilled") as any).value.expires_in).toBe(604800);
   });
   it("requires exact redirect, PKCE and correct client, including internal calls", async () => {
     for (const [who, proof, redirect] of [[client, verifier, uri + "/"], [client, "x".repeat(43), uri], [{ ...client, client_id: "other" }, verifier, uri]]) {
@@ -100,7 +100,7 @@ it("preserves the locked SDK token-handler PKCE handoff", async () => {
     grant_type: "authorization_code", client_id: client.client_id, code: "code", code_verifier: verifier,
   });
   expect(r.status).toBe(200);
-  expect(r.body.expires_in).toBe(3600);
+  expect(r.body.expires_in).toBe(604800);
   expect(issueMcpToken).toHaveBeenCalledTimes(1);
 });
 

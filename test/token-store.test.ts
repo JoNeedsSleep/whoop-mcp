@@ -365,7 +365,7 @@ describe("fixed bearer lifetime (fake db)", () => {
       expect(update).not.toHaveBeenCalled();
     }
   });
-  it("issues one-hour OAuth and seven-day PAT credentials with stored expiry", async () => {
+  it("issues seven-day OAuth and PAT credentials with stored expiry", async () => {
     const values = vi.fn(async (_row: any) => {});
     const tx = {
       select: () => ({ from: () => ({ where: () => ({ for: async () => [{ id: "u" }] }) }) }),
@@ -375,10 +375,30 @@ describe("fixed bearer lifetime (fake db)", () => {
     const before = Date.now();
     await store.issueMcpToken("u", "oauth", undefined, "client-1");
     await store.issueMcpToken("u", "pat");
-    expect(values.mock.calls[0][0].expiresAt.getTime() - before).toBeGreaterThanOrEqual(3600000);
-    expect(values.mock.calls[0][0].expiresAt.getTime() - before).toBeLessThan(3601000);
-    expect(values.mock.calls[1][0].expiresAt.getTime() - before).toBeGreaterThanOrEqual(7 * 86400000);
+    for (const [row] of values.mock.calls) {
+      expect(row.expiresAt.getTime() - before).toBeGreaterThanOrEqual(7 * 86400000);
+      expect(row.expiresAt.getTime() - before).toBeLessThan(7 * 86400000 + 1000);
+    }
     expect(values.mock.calls[0][0].clientId).toBe("client-1");
+  });
+  it("allows a week of access without sliding the deadline, then rejects the same bearer", async () => {
+    const start = Date.UTC(2026, 9, 18, 12);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(start);
+      const row = { userId: "u", clientId: "client", expiresAt: new Date(start + 7 * 86400000), revokedAt: null };
+      const set = vi.fn(() => ({ where: async () => {} }));
+      const db = { select: () => ({ from: () => ({ where: async () => [row] }) }), update: () => ({ set }) };
+      const store = new TokenStore(db as any, key, vi.fn());
+      for (const offset of [86400000, 7 * 86400000 - 1]) {
+        vi.setSystemTime(start + offset);
+        expect(await store.resolveMcpToken("same-bearer")).toMatchObject({ userId: "u", expiresAt: row.expiresAt });
+      }
+      expect(set.mock.calls.every(([patch]: any[]) => !Object.hasOwn(patch, "expiresAt"))).toBe(true);
+      vi.setSystemTime(start + 7 * 86400000);
+      expect(await store.resolveMcpToken("same-bearer")).toBeNull();
+      expect(set).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
   });
 });
 

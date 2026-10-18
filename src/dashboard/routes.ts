@@ -19,6 +19,7 @@ export interface DashboardDeps {
 // registered MCP clients (whose client_id values are CSPRNG-random) — this id is never
 // registered in oauthClients, so it can never collide with one.
 const DASHBOARD_CLIENT_ID = "whoop-mcp-dashboard";
+const DASHBOARD_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function dashboardClient(redirectUri: string): OAuthClientInformationFull {
   return { client_id: DASHBOARD_CLIENT_ID, redirect_uris: [redirectUri] } as OAuthClientInformationFull;
@@ -34,7 +35,7 @@ export function createDashboardRouter(deps: DashboardDeps): Router {
       secure: true,
       path: "/",
       sameSite: "lax",
-      maxAge: 8 * 60 * 60 * 1000,
+      maxAge: DASHBOARD_SESSION_TTL_MS,
     }),
   );
   router.use(express.urlencoded({ extended: false }));
@@ -92,7 +93,8 @@ export function createDashboardRouter(deps: DashboardDeps): Router {
         res.status(502).send("WHOOP connection failed, please try again.");
         return;
       }
-      req.session = { userId, expiresAt: Date.now() + 8 * 60 * 60 * 1000 };
+      // Absolute lifetime: reading or using the dashboard must not renew it.
+      req.session = { userId, expiresAt: Date.now() + DASHBOARD_SESSION_TTL_MS };
       res.redirect(302, `${deps.publicBaseUrl}/dashboard`);
     } catch {
       res.status(502).send("WHOOP connection failed, please try again.");

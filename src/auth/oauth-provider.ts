@@ -120,7 +120,7 @@ export class WhoopOAuthProvider implements OAuthServerProvider {
       <h1>Allow this client to read WHOOP health data?</h1>
       <p>Client name (unverified): ${escapeHtml(client.client_name ?? "Unnamed client")}</p>
       <p>Client ID: ${escapeHtml(client.client_id)}</p>
-      <p>Exact callback: ${escapeHtml(params.redirectUri)}</p><p>Scope: mcp. Access expires after one hour.</p>
+      <p>Exact callback: ${escapeHtml(params.redirectUri)}</p><p>Scope: mcp. Access expires after seven days and can be revoked sooner.</p>
       <form method="post" action="/oauth/consent"><input type="hidden" name="state" value="${state}">
       <input type="hidden" name="csrf" value="${csrf}"><button name="decision" value="allow">Allow</button>
       <button name="decision" value="deny">Deny</button></form></html>`);
