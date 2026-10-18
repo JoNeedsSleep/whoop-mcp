@@ -32,7 +32,6 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 import { api, isUnauthorized, type TokenSummary } from "@/lib/api";
-import { ConnectionGuide } from "@/components/ConnectionGuide";
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : "Something went wrong");
 
@@ -273,7 +272,10 @@ export function TokensCard({ onUnauthorized }: { onUnauthorized: () => void }) {
               <CopyIcon />
             </Button>
           </div>
-          {newToken ? <ConnectionGuide token={newToken} /> : null}
+          <p className="text-sm text-muted-foreground">
+            Codex and Claude Code connections are pending the secure gateway. This token is not
+            a gateway credential.
+          </p>
           <DialogFooter showCloseButton />
         </DialogContent>
       </Dialog>

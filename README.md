@@ -2,6 +2,32 @@
 
 # WHOOP MCP Server
 
+## Planned Codex and Claude Code connections for this branch
+
+Both clients are intended to work at the same time through the separately trusted
+gateway, with a separate revocable authorization for each and a fixed seven-day
+access period. These connections are **not implemented or enabled yet**. The local
+sample preview cannot connect either client, and service PATs are not gateway credentials.
+
+- **Codex:** add the approved gateway as a Streamable HTTP MCP server, then
+  authenticate in the app or with `codex mcp login whoop`. Local app, CLI and IDE
+  clients on the same Codex host share MCP configuration.
+  [Official Codex setup](https://developers.openai.com/codex/mcp).
+- **Claude Code:** add the approved gateway with HTTP transport, then open `/mcp`
+  and complete browser sign-in. Configure it separately from Codex so either
+  client's access can be revoked without affecting the other.
+  [Official Claude Code setup](https://code.claude.com/docs/en/mcp).
+
+Before these steps become usable, the gateway needs reviewed MCP transport,
+independent authentication, native-client callback handling, and end-to-end tests
+for both clients. Their default loopback OAuth callbacks do not satisfy the WHOOP
+service's current exact-HTTPS callback policy. Do not enable legacy direct MCP or
+relax that policy as a workaround. OpenAI/Anthropic account credentials must never
+be provided to the WHOOP service. See [SECURITY_REVIEW.md](SECURITY_REVIEW.md).
+
+The remaining README describes the upstream project, not this branch's approved
+connection or deployment procedure.
+
 A multi-user [MCP](https://modelcontextprotocol.io) server that exposes WHOOP
 fitness data (recovery, sleep, workouts, cycles, profile, body measurements)
 to AI clients such as Claude, ChatGPT, and local editors (Cursor, Cline).

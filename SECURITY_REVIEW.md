@@ -10,7 +10,7 @@ A fully compromised WHOOP service must have no OpenAI login, OpenAI API key, bro
 Use separate trust domains:
 
 ```text
-ChatGPT / authorized user
+Codex / Claude Code / ChatGPT / authorized user
         | authenticated, client-initiated tool requests
         v
 Separately trusted minimal gateway
@@ -96,6 +96,18 @@ The user-facing benefit is avoiding the earlier eight-hour browser and one-hour 
 After this change, the approved offline suites passed again: 104 server tests, eight web tests and eight gateway tests, plus the server/web type checks and build. New regressions exercise a completed login past day one, signed-cookie replay exactly at day seven, fixed token expiry and no sliding renewal. Cross-review found no remaining findings in this change. Only documentation changed after that tested source snapshot.
 
 ## Remaining limits and release blockers
+
+### Codex and Claude Code requirement
+
+Both local clients are intended to connect concurrently through the separately trusted gateway. Each must receive its own revocable, audience-bound gateway credential with a fixed seven-day access period; WHOOP service PATs and gateway-to-service credentials must not double as client credentials. OpenAI and Anthropic account credentials stay outside the WHOOP service and gateway. The frontend now describes this planned setup and removes direct service URLs and token-filled shell/config snippets. No client configuration or account connection was made.
+
+Official [Codex MCP documentation](https://developers.openai.com/codex/mcp) and [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp) confirm HTTP MCP and browser OAuth support. Their native callback defaults use HTTP loopback addresses with variable ports; the WHOOP service deliberately accepts only explicitly allowed exact HTTPS callbacks. Compatibility therefore remains blocked until the independent gateway implements a reviewed native-client callback policy, PKCE, resource/audience binding and authenticated client identity. Do not widen the WHOOP service's callback policy or enable legacy direct MCP as a workaround.
+
+Before real connections, test both clients against the actual gateway: simultaneous access, exact registered callback behavior (reject foreign host/path), successful return from browser sign-in, day-one reuse, rejection at day seven, reauthorization prompts, and independent revocation. Verify that revoking Codex leaves Claude Code working and vice versa, while shared durable request budgets cannot be bypassed by using both. Local clients must reach the protected gateway; hosted/cloud client connectivity is a separate requirement. The gateway's seven-day policy is planned, not implemented by this documentation change.
+
+For this UI/documentation change, the eight web tests and full server/web type checks and build passed again in a fresh verified offline Node 22 container using the unchanged lockfile and integrity-checked dependency archive. The container was stopped afterward. Backend code was unchanged, so server/database/gateway tests were not repeated. Independent cross-review found no issues in the guide or documented boundary.
+
+### Other release blockers
 
 The consent-to-WHOOP browser nonce, single-use state, code/issuance transaction and default-disabled direct MCP route retain the earlier review's protections. The new concurrency tests confirm coordination inside PostgreSQL, not atomicity between WHOOP's remote token rotation and a database commit. If WHOOP rotates successfully and persistence then fails, reconnect/recovery can still be necessary. A refresh holds the user lock through the bounded upstream request; login, token issuance and revocation may wait for it.
 
