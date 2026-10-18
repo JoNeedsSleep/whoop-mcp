@@ -91,7 +91,7 @@ function safeToolResult(result, date) {
 // Stateless Streamable HTTP: no session IDs, SSE, server-initiated requests or
 // advertised sampling/resources/prompts/tasks. Public HTTPS is terminated by the
 // separately reviewed proxy. Never infer the origin from forwarded headers.
-export function createGatewayServer({ publicOrigin, auth, store, callTool, allowInsecureLoopback = false }) {
+export function createGatewayServer({ publicOrigin, auth, store, callTool, now = Date.now, allowInsecureLoopback = false }) {
   const origin = new URL(publicOrigin);
   const fixtureOrigin = allowInsecureLoopback === true && origin.protocol === "http:" &&
     ["127.0.0.1", "[::1]"].includes(origin.hostname);
@@ -129,7 +129,7 @@ export function createGatewayServer({ publicOrigin, auth, store, callTool, allow
       if (url.origin !== publicOrigin || `${url.pathname}${url.search}` !== req.url) {
         error(res, 400, -32600, "Invalid request", null, true); return;
       }
-      if (url.pathname !== "/mcp") {
+      if (url.pathname !== "/mcp" && url.pathname !== "/data/snapshot") {
         if (await auth.handleAuth(req, res, url)) return;
         error(res, 404, -32600, "Not found", null, true); return;
       }
@@ -142,6 +142,45 @@ export function createGatewayServer({ publicOrigin, auth, store, callTool, allow
       if (!principal) {
         res.setHeader("WWW-Authenticate", `Bearer resource_metadata="${publicOrigin}/.well-known/oauth-protected-resource"`);
         error(res, 401, -32001, "Unauthorized", null, true); return;
+      }
+      if (url.pathname === "/data/snapshot") {
+        if (req.method !== "GET") {
+          res.setHeader("Allow", "GET"); error(res, 405, -32600, "Method not allowed", null, true); return;
+        }
+        if (req.headers["transfer-encoding"] !== undefined ||
+            (req.headers["content-length"] !== undefined && req.headers["content-length"] !== "0")) {
+          error(res, 400, -32600, "Invalid request", null, true); return;
+        }
+        // A fixed window is independent of prompts and tool calls on the laptop.
+        // This endpoint uses the existing summary grant (/mcp audience), but
+        // sends only data. The local reader never contacts the remote MCP API.
+        const windowEnd = new Date(now()).toISOString().slice(0, 10);
+        const end = Date.parse(windowEnd);
+        const summaries = [];
+        req.socket.setTimeout(40000);
+        const deadline = setTimeout(() => error(res, 503, -32603, "Snapshot unavailable", null, true), 37000);
+        deadline.unref();
+        try {
+          for (let offset = 6; offset >= 0; offset--) {
+            if (res.destroyed || res.writableEnded) return;
+            if (!await auth.verifyBearer(bearer[1])) {
+              error(res, 401, -32001, "Unauthorized", null, true); return;
+            }
+            const lease = await store.acquireToolCall();
+            if (!lease) { error(res, 429, -32000, "Request limit reached", null, true); return; }
+            const date = new Date(end - offset * 86400000).toISOString().slice(0, 10);
+            try {
+              const result = safeToolResult(await callTool(TOOLS[0].name, { date }), date);
+              if (result.isError) { error(res, 503, -32603, "Snapshot unavailable", null, true); return; }
+              summaries.push(result.structuredContent);
+            } finally { await store.releaseToolCall(lease); }
+          }
+          if (!await auth.verifyBearer(bearer[1])) {
+            error(res, 401, -32001, "Unauthorized", null, true); return;
+          }
+          json(res, 200, { version: 1, windowEnd, summaries });
+        } finally { clearTimeout(deadline); }
+        return;
       }
       if (req.method !== "POST") {
         res.setHeader("Allow", "POST"); error(res, 405, -32600, "Method not allowed", null, true); return;

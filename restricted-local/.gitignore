@@ -1,0 +1,5 @@
+operator.json
+token.json
+cache.json
+*.sqlite
+*.sqlite-*

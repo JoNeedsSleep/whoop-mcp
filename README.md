@@ -2,23 +2,24 @@
 
 # WHOOP MCP Server
 
-## Codex and Claude Code through the independent gateway
+## Codex and Claude Code through the restricted local adapter
 
-This branch now implements the independent gateway's Streamable HTTP MCP,
-owner sign-in, OAuth consent, exact native callbacks, PKCE, persisted seven-day
-access, per-client revocation and shared durable request limits. Both clients
-can be authorized separately against the same gateway.
+Use the [restricted local adapter](restricted-local/README.md): both clients
+connect to an offline stdio reader backed by a validated numeric cache. A separate
+isolated process signs in to the gateway for seven days and synchronizes a fixed
+seven-day dataset independently of the conversation. No remote tool definitions,
+free text, URLs or errors are passed to the model. Direct remote MCP and the legacy
+local extension do not provide this boundary.
 
-Follow [the gateway runtime and client setup guide](review-gateway/README.md).
-It includes the Codex configuration and Claude Code command, fixed callback
-ports, private secret provisioning, and the dedicated summary-only machine
-credential. Do not use service PATs as gateway credentials or enable legacy
-direct MCP. No real client, WHOOP account or deployment is configured by this
-code change. The localhost sample preview remains sample-only.
+The [gateway guide](review-gateway/README.md) covers its separate authorization and
+bounded data endpoint. The [Railway plan](RAILWAY_PLAN.md) explains proposed costs,
+separation from the static site, and the provider's missing outbound firewall.
+No real client, WHOOP account or deployment is configured by this code change.
+The localhost sample preview remains sample-only.
 
 Read [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for isolation evidence and remaining
-deployment checks. The remaining README describes the upstream project, not
-this branch's approved connection or deployment procedure.
+release checks. The remaining README describes the upstream project, not this
+branch's approved connection or deployment procedure.
 
 A multi-user [MCP](https://modelcontextprotocol.io) server that exposes WHOOP
 fitness data (recovery, sleep, workouts, cycles, profile, body measurements)

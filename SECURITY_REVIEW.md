@@ -7,19 +7,28 @@ This is not an approved deployment. The server/web build and test suites now pas
 
 A fully compromised WHOOP service must have no OpenAI login, OpenAI API key, browser session, GitHub token, SSH key, DNS credential, hosting administrator credential, unrelated application secret or unrelated filesystem mount to steal. WHOOP health data and the service's WHOOP-specific tokens are within the assumed compromise. The remaining `read:profile` permission also makes name/email available to a compromised service; dropping the profile tool alone cannot prevent that.
 
+The current client-facing boundary is the restricted local adapter. The remote
+WHOOP service and remote gateway may both be compromised. Clients use an offline
+local MCP reader, not the remote MCP endpoint or legacy local extension. Local
+code and image IDs must be reviewed and pinned independently of remote releases.
+
 Use separate trust domains:
 
 ```text
-Codex / Claude Code / ChatGPT / authorized user
-        | authenticated, client-initiated tool requests
+Codex / Claude Code
+        | local stdio tool calls; no network or credentials in reader
         v
-Separately trusted minimal gateway
-  fixed reviewed tool definitions; strict input and output validation
-  no model API key; no other applications; no upstream tool discovery
-        | fixed HTTPS endpoint + dedicated WHOOP-service-only bearer
+Pinned offline local MCP reader
+  immutable local tool definition; fixed errors; bounded numeric fields
+        | read-only per-client cache, expires within 90 minutes
         v
-WHOOP service + dedicated database
-        | WHOOP-only OAuth credentials, restricted outbound access
+Separate isolated local sync/login process
+  seven-day gateway grant; fixed seven-day snapshot; hourly admission
+        | fixed HTTPS /data/snapshot; no conversation-dependent requests
+        v
+Remote gateway + WHOOP service + dedicated database
+  treat all remote responses as untrusted; no unrelated secrets/files
+        | WHOOP-specific OAuth credentials
         v
 WHOOP API
 ```
@@ -34,7 +43,7 @@ The WHOOP service's legacy `/mcp` remains absent by default (`ENABLE_LEGACY_DIRE
 
 Schema validation blocks instruction-bearing strings and unapproved fields. It does **not** authenticate plausible numbers, dates or enum values: a compromised server can fabricate a normal-looking recovery score, encode information in valid metrics, omit records, or cause denial of service. The tests explicitly demonstrate acceptance of plausible falsified data. Clinical correctness and provenance need independent verification. No absolute security or impossibility of prompt injection, model misuse or distillation is claimed. Keeping model credentials and outputs away from the server, disallowing server-initiated model calls, and applying independently enforced quotas substantially limits opportunities; it cannot prove that all misuse is impossible.
 
-These protections assume the independent gateway remains trusted. A compromised gateway can bypass its own schema, authentication and quotas, capture subsequent login credentials and return malicious MCP responses. Those responses may threaten files, secrets or actions available to the client, depending on its permissions and security protections; this design does not guarantee the user's laptop remains safe after gateway compromise.
+The gateway protections alone assume that gateway remains trusted. A compromised gateway can bypass its own schema, authentication and quotas, capture subsequent gateway login credentials and return malicious MCP responses. Direct remote MCP would pass those responses to the client. The implemented restricted local adapter removes that direct path: it fetches only a data snapshot, independently validates it, and serves locally constructed MCP messages from an offline reader. Neither client is configured to contact the remote MCP endpoint. This is source implementation, not a claim that installed client settings or deployment have been activated. It does not guarantee laptop safety against a vulnerable local parser/runtime/kernel, a compromised local release, or model misuse of plausible fabricated numbers.
 
 ## Patch contents
 
@@ -144,3 +153,110 @@ The consent-to-WHOOP browser nonce, single-use state, code/issuance transaction 
 Pending-state admission bounds stored records and cleanup work. It does not rate-limit HTTP traffic or prevent someone filling the available slots; independently protected ingress and durable request budgets remain required. If admission fails after consent has consumed the old state, the fixed 503 requires restarting that login flow. The cap does not evict active flows, and an inherited backlog may require several attempts to drain.
 
 The implemented gateway has no deployed enforcement boundary yet. Actual browser cookie behavior and installed-client login through the chosen protected TLS ingress, dedicated runtime secrets/network policy, a separately trusted gateway release and production rollout/migration review remain release checks. Native CLI binaries and real accounts were not used by the synthetic tests. Restore of an older gateway DB can resurrect then-valid grants: revoke all before reopening restored ingress. The PR must remain draft and unmerged. Website/School files, deployments, DNS and account connections remain outside this work.
+
+
+## Restricted local adapter follow-up (2026-10-18)
+
+At the user's request, the threat model now includes a compromised remote gateway.
+The new `restricted-local/` code separates human login and hourly data sync from
+an offline stdio MCP reader. Both clients use their own reader/cache and seven-day
+gateway grant; neither reader receives a token or contacts remote MCP. The earlier
+legacy local extension is not an acceptable substitute.
+
+The local policy is bundled with the reviewed release. It recreates exactly eight
+summary fields, checks seven consecutive UTC dates, bounded numeric ranges and
+precision, and rejects remote text, tool definitions, metadata, URLs and extra
+fields. MCP request dates only select cached dates. Cache misses and tool calls
+cannot trigger sync, login or network activity. The new authenticated gateway GET
+`/data/snapshot` takes no query/body and collects only the fixed seven-day window,
+charging the shared quota for each summary and rechecking the grant before each
+fetch and before delivery. Failed collection returns no partial snapshot.
+
+Local OAuth uses fixed configured endpoints, state/S256/issuer/exact callbacks,
+a five-minute listener and five-second token exchange bound. No discovery or
+remote-selected endpoint is used. Token files are private, client/origin-bound
+and locally capped at the original seven-day deadline. Sync durably charges an
+hourly attempt before networking; rejects redirects, compression, oversized or
+malformed bodies; and applies a 40-second overall deadline. Cache writes are
+atomic and private; reads reject unsafe file types/links, permissions, malformed
+UTF-8 and unknown fields. A cache expires within 90 minutes and never outlives its
+authorization. A 401 removes it. Already cached data can remain readable after
+remote revocation until the next sync or that deadline; revocation cannot retract
+copies already delivered. Failed sync never extends freshness.
+
+The reviewed host-side launcher uses the fixed OrbStack socket and an empty Docker
+configuration with a stripped environment. It selects immutable locally approved
+image IDs and dedicated labeled per-client Docker volumes; it never mounts a host
+directory or forwards credentials/SSH. The reader is non-root, read-only, network
+none, capabilities dropped, no-new-privileges, memory/swap/CPU/PID limited, and sees
+only its cache volume read-only. Sync/login sees only its own authorization/cache
+volumes. Its process starts inert; a separate pinned helper gets NET_ADMIN only
+in that container's namespace and installs default-deny IPv4/IPv6 rules before
+application execution. Only the approved gateway IPv4:443 is allowed outbound;
+DNS is disabled and the gateway hostname pinned locally, with TLS hostname checks
+retained. Login alone exposes its exact callback port on laptop loopback. The
+helper receives no Docker socket or host mounts. Operator configuration, launcher,
+image IDs and Docker authority remain trusted; they are not model-facing tools.
+
+Three subagents implemented and cross-reviewed policy/cache/reader, login/sync,
+and malicious-server/launcher tests; the parent implemented the remote snapshot
+endpoint and verified containers. Review fixed the container callback binding,
+reader attach lifetime, cleanup after failed inspection, ignored local SDK request
+metadata compatibility and Docker's canonical CAP_ spelling without widening the
+capability allowlist. The final static cross-reviews reported no remaining
+actionable findings within this scope.
+
+Final validation reused the existing hashed dependency archive inside a fresh,
+verified Node 22.23.3 container. No new dependencies were fetched and no lifecycle
+scripts ran. Internet, metadata, host, filesystem and forwarded-credential
+negative checks passed before execution. The separate empty PostgreSQL 17.11
+fixture again applied only the approved branch schema to synthetic data.
+
+| Restricted-adapter follow-up check | Result |
+| --- | --- |
+| Gateway Node tests, including fixed snapshot authorization/quotas | 51 passed, 0 failed/skipped |
+| Local Node tests, including adversarial TLS, real SDK stdio and launcher mocks | 53 passed, 0 failed/skipped |
+| Server Vitest suite, including actual PostgreSQL concurrency | 109 passed, 0 failed/skipped |
+| Web Vitest suite | 8 passed, 0 failed/skipped |
+| Offline server/web type checks and Vite build | Passed |
+| Reader and sync image builds | Passed offline, cached pinned Node, allowlisted contexts, no packages or RUN instructions |
+| Packaged reader smoke | Passed with synthetic read-only cache; writes fail EROFS, credential/host paths absent, internet/metadata/host connections denied |
+| Sync network/callback smoke | Passed: namespace-only firewall, blocked unapproved public/private/metadata/IPv6 destinations, fixed hosts mapping, synthetic browser callback through laptop-loopback publication |
+| `git diff --check` | Passed |
+
+The final **221 tests** passed. Malicious HTTPS tests use an explicit synthetic CA
+and real streaming transport; wrong hostnames and untrusted certificates fail.
+They reject instruction strings, remote tools/prompts/resources/metadata, URL
+fields, extra fields, bad dates, oversized/compressed data, redirects and raw
+errors; they also demonstrate that plausible fabricated numbers pass. Locked SDK
+clients exercise both client IDs over actual reader stdio. Launcher tests use an
+injected Docker runner to exercise ordering, inspection drift, added capabilities
+and cleanup. Separate trusted host orchestration tested the built images and
+actual network/volume/callback controls; the full host launcher and installed
+Codex/Claude binaries were not activated with real accounts.
+
+Failed attempts were preserved locally. One clock-rollback fixture expected a
+quota error, but token validation rejected the request earlier; the assertion was
+corrected with the no-network assertion retained. Offline packaging initially
+used a BuildKit-only COPY flag; root-owned files/read-only execution are preserved
+with a compatible COPY. Actual Docker inspection exposed canonical CAP_NET_ADMIN
+versus NET_ADMIN naming; comparison now normalizes one optional prefix and tests
+reject extra, duplicate or substituted capabilities. No TLS/auth/schema check was
+weakened. Test/database/certificate-helper containers are stopped, and synthetic
+smoke containers/volumes were removed. Images were built locally only.
+
+Remaining limits: a compromised remote can leak its WHOOP data/tokens and gateway
+login material, deny service, or fabricate valid metrics/covert numeric messages.
+The local boundary removes direct remote free-text/MCP control; it does not prove
+semantic safety, data authenticity, or resistance to local parser/runtime/kernel
+exploits. Other tools/files/credentials already available to a model session are
+outside the reader sandbox. Use a narrowly scoped health session as well.
+
+[RAILWAY_PLAN.md](RAILWAY_PLAN.md) documents a separate small hosting proposal.
+Railway has no customer-enforced default-deny IPv4 egress and one shared private
+trust domain per environment. The proposed protected Tailscale ingress is not yet
+compatible with the launcher's public-IPv4-only policy; actual private routing,
+HTTPS proxy packaging and native activation remain release work. No private IP
+or host-network exception was added, and no deployment is claimed. The PR remains
+draft/unmerged; real accounts, client settings, paid resources, DNS, and unrelated
+website/School files remain unchanged.
