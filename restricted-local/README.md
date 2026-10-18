@@ -6,6 +6,11 @@ URL or the legacy `src/local` extension. Those paths let remote messages enter
 the assistant directly. This adapter requires a separately reviewed, pinned
 local release; the gateway cannot update it.
 
+The private transport and Railway runtime are implemented in source. They have
+not been enrolled into a real tailnet or connected to WHOOP or installed clients.
+Follow the remaining [activation checks](../deploy/railway/README.md#activation-checks)
+before a separately approved connection; source preparation is not deployment.
+
 ```text
 WHOOP -> remote WHOOP service -> remote gateway
                                  |
@@ -76,14 +81,51 @@ SSH agent, browser profile, authorization volume or Docker socket into the reade
 The host-side launcher necessarily has authority to invoke Docker; this is an
 operator installation tool and is not exposed as an MCP tool.
 
-Sync and login get separate authorization and cache volumes, never host bind
-mounts. A temporary firewall helper configures only their network namespace before
-application code starts. Outbound access is limited to the operator-approved
-gateway IPv4 on TCP 443, with DNS and IPv6 blocked. The hostname is pinned in the
-container hosts file and TLS still checks that hostname. An IP allowlist on a
-shared hosting/CDN address is not a hostname boundary; the trusted local sync code
-also fixes the HTTPS origin and rejects redirects. No helper or application gets
-the host Docker socket. Login alone gets a laptop-loopback callback mapping.
+Sync and login get per-client authorization and cache volumes, never host bind
+mounts. The launcher supports two explicit configurations:
+
+- **Private transport:** a separate container owns a dedicated Tailscale node
+  and its private state volume. Its fixed relay connects only to the configured
+  gateway tailnet IPv4 on TCP 443. Sync has `network:none` and receives only the
+  relay's Unix-socket volume, mounted read-only. Login receives the same socket
+  plus its fixed laptop-loopback callback mapping; its bridge namespace denies
+  new outbound IP connections and accepts only the callback and established
+  replies. Neither application receives Tailscale state, its control socket or
+  a general SOCKS/HTTP proxy. The reader receives no transport volume at all.
+- **Public IPv4 mode:** the existing explicit public-address configuration is
+  retained. A temporary helper limits application egress to that one address on
+  TCP 443, with DNS/IPv6 blocked and the HTTPS hostname pinned in the hosts file.
+  A shared CDN IP is not a hostname boundary; the trusted application also fixes
+  the origin and refuses redirects. This mode does not authorize public ingress
+  or substitute for the private Railway route.
+
+Both modes verify the canonical HTTPS hostname and certificate. Private HTTPS
+travels end to end through the Unix relay; it has no direct-network fallback,
+remote-selected destination, proxy-environment override or insecure TLS mode.
+The relay admits two streams, bounds negotiation, duration and bytes, and never
+interprets client bytes as a new destination. The Tailscale service address
+`100.100.100.100` is not an allowed relay target.
+
+Before starting the local Tailscale daemon, a separate helper installs a firewall
+in only that container's namespace. It permits loopback, established replies,
+TCP 443 to public IPv4 addresses and DNS to **Cloudflare `1.1.1.1` on UDP/TCP 53**.
+Private-address LAN/host endpoints, metadata, reserved ranges and IPv6 are denied;
+new UDP peer traffic is denied. This prepares HTTPS/DERP fallback, whose real
+enrolled operation remains unverified. The transport can reach public Internet
+HTTPS; this is not a Tailscale-domain-only egress firewall.
+
+External tailnet policy is mandatory: each local transport tag may reach only the
+approved gateway on TCP 443; the gateway may reach only its approved backend on
+TCP 443. Permit the intended browser identity separately, and deny remote nodes
+access to the laptop and unrelated nodes. Review the whole policy for overlapping
+allow-all grants. The local firewall cannot constrain destinations inside an
+encrypted Tailscale tunnel if the transport itself is compromised. That process
+holds its dedicated node credential even after its enrollment key is deleted.
+See the [policy and runtime guide](../deploy/railway/README.md).
+
+No helper or application receives the host Docker socket, host Tailscale state,
+SSH forwarding, browser state or unrelated credentials. Namespace checks and any
+required firewall setup complete before application or transport code starts.
 
 The operator must review the actual deployment origin, address and proxy topology
 before initializing a real connection. DNS/address changes require explicit local
@@ -95,14 +137,31 @@ files or secrets when stronger client-side containment is needed.
 
 These are post-review setup instructions, not commands already executed against
 real accounts. The launcher is specific to this laptop's reviewed OrbStack socket
-and Docker binary; another host needs a reviewed change. It currently accepts
-only a canonical HTTPS DNS origin on port 443 and an explicitly approved public
-IPv4. It cannot yet use a private Tailscale address; see the Railway plan's ingress
-blocker. Never solve that by enabling host networking or broadening the allowlist.
+and Docker binary; another host needs a reviewed change. Both modes require a
+canonical HTTPS DNS origin on port 443 and immutable reviewed image IDs. Private
+mode selects one tailnet IPv4 explicitly; public mode still rejects the tailnet
+range. Neither mode relies on the laptop's Tailscale routing or host networking.
 
-After approving a reachable protected origin, build `Dockerfile.reader` and
-`Dockerfile.sync` from their allowlisted contexts offline. Save the resulting
-immutable image IDs in a private `operator.json` (mode `0600`, parent `0700`):
+After reviewing the protected origin and runtime, build `Dockerfile.reader` and
+`Dockerfile.sync` from their allowlisted contexts offline. Private mode also needs
+`Dockerfile.transport` built from its repository-shaped allowlist; it copies the
+pinned Tailscale binaries without installing packages. Record the resulting image
+IDs in private `operator.json` (mode `0600`, parent `0700`). Private configuration:
+
+```json
+{
+  "origin": "https://gateway.example-tailnet.ts.net",
+  "readerImage": "sha256:REPLACE_WITH_REVIEWED_READER_IMAGE_ID",
+  "syncImage": "sha256:REPLACE_WITH_REVIEWED_SYNC_IMAGE_ID",
+  "privateTransport": {
+    "image": "sha256:REPLACE_WITH_REVIEWED_TRANSPORT_IMAGE_ID",
+    "gatewayIpv4": "REPLACE_WITH_APPROVED_GATEWAY_TAILNET_IPV4"
+  }
+}
+```
+
+Public-address mode instead uses this exact configuration; never combine
+`approvedIpv4` and `privateTransport`:
 
 ```json
 {
@@ -114,25 +173,83 @@ immutable image IDs in a private `operator.json` (mode `0600`, parent `0700`):
 ```
 
 The placeholders deliberately fail validation. Use a reviewed absolute Node 22
-path to run the host-side launcher; all reader, sync and login code runs inside
-the restricted containers. In a separate terminal, run these operations for
-`codex` and then `claude-code`, replacing the example paths:
+path to run the host-side launcher; all reader, sync, login and transport code
+runs inside restricted containers. For each client, initialize fresh app volumes:
 
 ```sh
 /absolute/node22 /absolute/restricted-local/launch.mjs init codex /private/whoop/operator.json
+```
+
+For private mode, separately initialize its dedicated node/socket volumes:
+
+```sh
+/absolute/node22 /absolute/restricted-local/launch.mjs transport-init codex /private/whoop/operator.json
+```
+
+Enrollment requires separate account/network approval and the reviewed tailnet
+policy. Use a short-lived, single-use, pre-tagged key for exactly
+`tag:whoop-local-codex` or `tag:whoop-local-claude-code`. Pipe it directly from the
+approved secret store into the manual command below; the left-hand command is a
+placeholder for the reviewed secret-store operation, not a request to type a key:
+
+```sh
+/absolute/approved-secret-store-command | /absolute/node22 /absolute/restricted-local/launch.mjs transport-enroll codex /private/whoop/operator.json
+```
+
+The launcher refuses interactive terminal input for enrollment. Never put a key
+in arguments, environment, shell history, chat or logs. Enrollment starts no app
+or relay. Handled completion removes its temporary key file; abrupt interruption
+requires the recovery review below. Persistent node state remains private. Node
+identity lifetime is separate from the seven-day
+gateway grant. Normal startup reuses enrolled state and cannot enroll itself.
+
+Start each private transport in its own terminal and leave it running:
+
+```sh
+/absolute/node22 /absolute/restricted-local/launch.mjs transport-start codex /private/whoop/operator.json
+```
+
+Then, in another terminal, run the app operations below. Public mode skips the
+three `transport-*` operations. Repeat setup for `claude-code` with its separate
+config-selected volumes and tagged identity:
+
+```sh
 /absolute/node22 /absolute/restricted-local/launch.mjs login codex /private/whoop/operator.json
 /absolute/node22 /absolute/restricted-local/launch.mjs sync codex /private/whoop/operator.json
 /absolute/node22 /absolute/restricted-local/launch.mjs watch codex /private/whoop/operator.json
 ```
 
 `init` creates only fresh dedicated Docker-managed authorization/cache volumes
-and refuses to overwrite existing data. `login` prints the fixed gateway URL for
+and refuses to overwrite existing data; `transport-init` does the same for the
+separate node/socket volumes. `login` prints the fixed gateway URL for
 you to open. Enter only the separate gateway owner secret there. `sync` updates
 the cache once; `watch` is a foreground hourly sync loop, stopped with Ctrl-C.
 Run watches separately; Claude's watch delays its first attempt by 61 seconds
 to reduce contention with Codex. Manual simultaneous syncs can still collide
 with the gateway's shared single-flight limit and must wait for the next hour.
 The resource review date in names/labels is metadata, not automatic deletion.
+
+The private browser sign-in must run from an independently authorized tailnet
+device; application containers do not borrow its Tailscale or browser session.
+Keep transport start/enrollment manual and separate from MCP calls and the watch
+loop. Changing origins, node addresses or image IDs requires local review.
+
+Only one transport owner per client is allowed. Docker atomically reserves its
+fixed container name before state is mounted, and an exclusive state-file lock
+also protects against concurrent supervisors. Ctrl-C requests graceful shutdown
+inside that container's private PID namespace and attempts to allow five seconds
+for cleanup before removing the exact owned container. Failed cleanup falls back
+to forced removal. It never removes a preexisting owner.
+
+A crash or forced stop can leave `runtime.lock` or `gateway.sock`, which make
+subsequent startup fail closed; `tailscaled.sock` may also remain. For recovery, first stop and
+inspect every container holding that client's node/socket volumes. Only after
+confirming that no owner remains, use a trusted offline helper with those exact
+named volumes to remove confirmed stale lock/socket files. Preserve
+`tailscaled.state` and other identity data. Do not infer stale ownership from a
+PID belonging to another container, copy host Tailscale state, relax permissions
+or automatically reenroll. An interrupted enrollment key needs separate review
+and revocation/removal; suspected node compromise requires identity revocation.
 
 After those operations succeed, configure only the offline reader in Codex:
 

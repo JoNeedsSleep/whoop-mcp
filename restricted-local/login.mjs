@@ -1,7 +1,7 @@
 import http from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { AUTH_TTL_MS, CALLBACKS, boundedJson, exact, parseLocalConfig, parseToken, privateParent, readLocalConfig, writePrivateJson } from "./config.mjs";
+import { AUTH_TTL_MS, CALLBACKS, boundedJson, configuredFetch, exact, parseLocalConfig, parseToken, privateParent, readLocalConfig, writePrivateJson } from "./config.mjs";
 
 const random = () => randomBytes(32).toString("base64url");
 const matches = (a, b) => typeof a === "string" && typeof b === "string" && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -64,8 +64,9 @@ export async function startCallback(config, flow, { timeoutMs = 5 * 60000, conta
   timer = setTimeout(() => { finish(new Error()); server.closeAllConnections(); }, timeoutMs);
   return { code, address: server.address().address, close: () => { finish(new Error()); server.closeAllConnections(); } };
 }
-export async function exchangeLoginCode(rawConfig, flow, code, { fetchImpl = fetch, now = Date.now } = {}) {
+export async function exchangeLoginCode(rawConfig, flow, code, { fetchImpl, now = Date.now } = {}) {
   const config = parseLocalConfig(rawConfig);
+  fetchImpl ??= configuredFetch(config);
   if (!/^[A-Za-z0-9_-]{43}$/.test(code) || flow.redirectUri !== CALLBACKS[config.clientId] || !/^[A-Za-z0-9_-]{43}$/.test(flow.verifier)) throw new Error("LOGIN_NOT_COMPLETED");
   const startedAt = now();
   const token = await boundedJson(`${config.origin}/oauth/token`, { method: "POST", headers: { Accept: "application/json", "Accept-Encoding": "identity", "Content-Type": "application/x-www-form-urlencoded" },
@@ -79,7 +80,7 @@ export async function exchangeLoginCode(rawConfig, flow, code, { fetchImpl = fet
   writePrivateJson(config.tokenFile, record, 4096);
   return { expiresAt: record.expiresAt };
 }
-export async function runLogin(rawConfig, { fetchImpl = fetch, now = Date.now, containerCallback = false, onAuthorizationUrl = (url) => console.log(`Open this trusted gateway sign-in URL in your browser:\n${url}`) } = {}) {
+export async function runLogin(rawConfig, { fetchImpl, now = Date.now, containerCallback = false, onAuthorizationUrl = (url) => console.log(`Open this trusted gateway sign-in URL in your browser:\n${url}`) } = {}) {
   const config = parseLocalConfig(rawConfig); privateParent(config.tokenFile);
   const flow = createLoginFlow(config); const callback = await startCallback(config, flow, { containerCallback });
   try {

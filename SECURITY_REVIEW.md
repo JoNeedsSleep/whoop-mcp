@@ -24,6 +24,10 @@ Pinned offline local MCP reader
         v
 Separate isolated local sync/login process
   seven-day gateway grant; fixed seven-day snapshot; hourly admission
+        | end-to-end HTTPS through a read-only Unix relay socket
+        v
+Dedicated per-client Tailscale transport container
+  separate node state; fixed gateway tailnet IPv4:443; external ACL required
         | fixed HTTPS /data/snapshot; no conversation-dependent requests
         v
 Remote gateway + WHOOP service + dedicated database
@@ -58,7 +62,7 @@ The gateway protections alone assume that gateway remains trusted. A compromised
 - Serialize WHOOP refreshes across processes under the shared user-row lock, re-read token state after acquiring the lock, and explicitly use READ COMMITTED regardless of the database default. A 401 carries the exact rejected token so concurrent or delayed failures reuse a stored replacement. Login/upsert takes the same user-before-token lock order.
 - Bound pending login/consent state with a shared nonblocking advisory transaction lock, a 100-record admission cap, and at most 25 expired deletions per attempt. Cap-denied requests still commit cleanup; lock/storage failures return a fixed 503. Existing states beyond the cap drain in bounded batches, and active states are not evicted.
 - Add a narrow summary endpoint and fixed errors; deny WHOOP request redirects, bound timeouts and pagination. The summary selects at most one record of each type in the requested UTC API window; it is not a promise to join recovery, sleep and cycle records by physiological cycle or local calendar date.
-- Disable dependency lifecycle scripts in Docker builds, use a separate production dependency stage, allowlist build-context files and run as the unprivileged `node` user. The WHOOP production image has not been built. Its release still needs reviewed digest pinning and vulnerability checks; the independent gateway image is covered below.
+- Disable dependency lifecycle scripts in Docker builds, use a separate production dependency stage, allowlist build-context files and run as the unprivileged `node` user. The private Railway packages now have offline artifact-only builds and architecture-specific base digests, covered below. A comprehensive dependency/base-image vulnerability review remains a release gate.
 
 ## Isolation and release requirements
 
@@ -252,11 +256,107 @@ semantic safety, data authenticity, or resistance to local parser/runtime/kernel
 exploits. Other tools/files/credentials already available to a model session are
 outside the reader sandbox. Use a narrowly scoped health session as well.
 
-[RAILWAY_PLAN.md](RAILWAY_PLAN.md) documents a separate small hosting proposal.
-Railway has no customer-enforced default-deny IPv4 egress and one shared private
-trust domain per environment. The proposed protected Tailscale ingress is not yet
-compatible with the launcher's public-IPv4-only policy; actual private routing,
-HTTPS proxy packaging and native activation remain release work. No private IP
-or host-network exception was added, and no deployment is claimed. The PR remains
-draft/unmerged; real accounts, client settings, paid resources, DNS, and unrelated
-website/School files remain unchanged.
+[RAILWAY_PLAN.md](RAILWAY_PLAN.md) documents the separate hosting proposal.
+The private-transport implementation below supersedes the earlier public-IP-only
+integration blocker. Railway still has no customer-enforced default-deny IPv4
+egress and one shared private trust domain per environment. Only the separately
+approved empty Railway project exists; no running service or deployment is claimed.
+
+## Private connection and Railway packaging follow-up (2026-10-18)
+
+The private launcher separates each client's Tailscale node into its own
+container and state volume. Sync runs with `network:none` and sees its own
+auth/cache volumes plus the relay socket volume read-only. Login receives the
+same socket and a loopback-published callback; namespace rules deny all new IP
+egress. Neither receives Tailscale state, its administrative socket, a general
+SOCKS proxy, host files or host credentials. Reader isolation is unchanged.
+
+The relay always connects through userspace Tailscale to the configured gateway
+CGNAT IPv4:443. Its peer cannot choose a destination; admission, bytes, handshake
+and total connection time are bounded. HTTPS runs end to end over the Unix byte
+stream with the canonical hostname, normal certificate validation, fixed endpoint
+shapes and no DNS/proxy environment/network fallback. Synthetic tests can inject
+a test CA; no operator configuration or production launcher permits a CA override.
+
+The transport itself needs public TCP443 for Tailscale control/DERP and UDP/TCP53
+to 1.1.1.1. Its firewall denies LAN, metadata, host-address ranges, direct CGNAT
+and IPv6 traffic; it does not constrain destinations inside encrypted Tailscale
+traffic. **External tailnet ACLs must restrict each local node to only the exact
+gateway:443.** A compromised transport may steal that node identity or send data
+over its allowed public egress. It is credential-separated from the app, not an
+internet-free process or a substitute for an ACL. No local transport is enrolled.
+
+Railway gateway/backend wrappers run userspace Tailscale and Serve with private
+HTTPS443 to loopback8787/8080. The gateway uses the same fixed TLS relay for its
+single backend. Explicit enrollment reads a one-use key from stdin, writes it
+only to a private temporary file, removes it on handled completion/failure and
+starts no app/relay. Abrupt termination can leave that file; revoke the key and
+inspect the stopped runtime before removing the residue. Normal startup requires
+enrolled state. The supervisor rejects unsafe
+saved configuration, verifies exact identity/settings/Serve mapping, strips child
+environments and stops peers on failure. Concurrent starts fail before sharing
+node state. Clean shutdown releases locks/sockets; unclean leftovers require
+explicit inspected operator recovery, never automatic deletion or reenrollment.
+
+The backend now binds loopback by default and applies migrations only with
+explicit `RUN_MIGRATIONS=true`. The Railway wrapper always forces migrations and
+legacy direct MCP off. Starting a runtime cannot implicitly upgrade a database.
+
+Three subagents implemented and cross-reviewed the relay/client boundary,
+deployment supervisor and adversarial tests. Review/test failures fixed a paused
+SOCKS negotiation retaining a cancelled client, concurrent state writers,
+partial enrollment-key cleanup and daemon spawn-error cleanup. Strict rejection
+and cancellation assertions were retained. No final actionable finding remained
+within their reviewed source scope; this is not an exhaustive security audit.
+
+Validation reused the hashed dependencies only inside a newly verified offline
+Node22.23.3 container. No npm fetching or lifecycle scripts ran. Official pinned
+Tailscale1.104.1 images were fetched from the registry; Node/Tailscale platform
+manifest digests are in the Dockerfiles. Native vendor binaries and exact CLI
+settings were checked offline on ARM64 and AMD64 without enrollment. The observed
+unenrolled state was empty; populated live state and certificate issuance still
+need verification after approved enrollment. PostgreSQL again used only the
+approved disposable synthetic fixture.
+
+| Private-connection check | Result |
+| --- | --- |
+| Server Vitest suite, including PostgreSQL concurrency | 110 passed |
+| Gateway Node suite | 51 passed |
+| Local Node suite, including actual TLS/Unix/SOCKS and launcher failures | 72 passed |
+| Deployment config, supervisor and Serve proxy-contract suite | 15 passed |
+| Web Vitest suite | 8 passed |
+| Server/web type checks and build | Passed offline |
+| Local sync/transport ARM64 and remote gateway/backend AMD64 images | Built offline from allowlisted artifact contexts |
+| Packaged sync with default transport selection | Separate containers, read-only Unix volume, synthetic TLS, wrong-host rejection, fixed destination, hourly limit and 90-minute cache passed |
+| Packaged remote services and local transport | Non-root/offline; missing enrollment/config fails closed; pinned vendor versions run |
+| Packaged backend startup | Health response works on loopback only; no database connection or migration at default startup |
+| Graceful cleanup kernel check | Same-UID signal stays inside the private PID namespace; synthetic socket/lock removed while namespace PID1 survives |
+| Actual production namespace firewall rules | 27 positive reachability controls and 27 policy checks passed on an internal dual-stack fixture network; approved HTTPS/DNS and callback replies work, prohibited destinations/ports and new login egress fail |
+
+Final suites total **256 passed, zero failed/skipped**. Failed intermediate
+attempts and logs are retained locally. Earlier fixture/string-buffer and test
+runner discovery failures were corrected; native AMD64 packaging required
+architecture-specific manifests rather than cached multiarch tags. The separate
+container smoke uses synthetic credentials/certificates only. No image was
+pushed, deployed or connected to a real account.
+
+Firewall tests used synthetic public/metadata/tailnet address aliases on a fresh
+internal Docker bridge, with no external traffic or published ports. All 12 peer
+sentinels remained live after policy checks. The production rule strings were
+exported only inside the verified offline Node container. Two harness failures
+were corrected without changing policy: Docker error-message case and the UDP
+fixture's reply source address. All network helpers, fixture containers and that
+network were verified removed. Disposable build/test/database containers were
+also removed; the existing sample preview was left running.
+
+Actual Tailscale enrollment, effective ACL negative-access tests, Serve certificate
+issuance, private routing from the laptop/browser, and installed Codex/Claude
+login/callback behavior remain live release gates. The Serve tests exercise the
+reviewed vendor proxy contract; they are not a deployed Serve assertion.
+Dependency/base-image vulnerability review, a least-privilege database role,
+backup/restore/revocation rehearsal and an explicitly approved migration plan
+also remain. See [deployment instructions](deploy/railway/README.md). Railway's
+egress/shared-environment limitations and the earlier remote-compromise limits
+still apply. Seven-day authorization remains unchanged. The PR stays draft and
+unmerged; no deployment, DNS, real WHOOP connection, installed client settings or
+unrelated website/School files changed.

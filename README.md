@@ -14,8 +14,23 @@ local extension do not provide this boundary.
 The [gateway guide](review-gateway/README.md) covers its separate authorization and
 bounded data endpoint. The [Railway plan](RAILWAY_PLAN.md) explains proposed costs,
 separation from the static site, and the provider's missing outbound firewall.
-No real client, WHOOP account or deployment is configured by this code change.
-The localhost sample preview remains sample-only.
+Private transport source is implemented: a separate dedicated Tailscale container
+holds its own node state and exposes one fixed TLS byte relay to the isolated
+sync/login process. The reader remains offline; gateway grants last up to seven
+days, sync runs at most hourly, and cached data expires within 90 minutes.
+
+The approved Railway project `whoop_individual_kill-2026-11-18`
+(`657e4033-3a47-4d99-ad5a-f934e2a11528`) exists and is empty. No application service
+has been deployed, and no real WHOOP/Tailscale account connection, DNS change or
+installed-client setup has occurred. Enrollment, restrictive tailnet ACLs, actual
+Serve certificates/cookies and both live clients remain activation gates. The
+localhost sample preview remains sample-only.
+
+The backend now binds loopback by default. Startup migrations require explicit
+`RUN_MIGRATIONS=true`; the private runtime wrapper forces this flag to `false`.
+Review and approve database migrations separately. The
+[private runtime guide](deploy/railway/README.md) describes the source package and
+remaining checks; it does not authorize deployment.
 
 Read [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for isolation evidence and remaining
 release checks. The remaining README describes the upstream project, not this

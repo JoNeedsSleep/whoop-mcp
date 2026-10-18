@@ -7,7 +7,7 @@ import { createGatewayAuth } from "./auth.mjs";
 import { createGatewayServer } from "./server.mjs";
 import { createGateway } from "./gateway.mjs";
 
-export function startGateway(raw) {
+export function startGateway(raw, { fetchImpl = fetch } = {}) {
   process.umask(0o077);
   const config = parseGatewayConfig(raw);
   validateStorage(config.databaseFile);
@@ -16,10 +16,10 @@ export function startGateway(raw) {
   try {
     const auth = createGatewayAuth({ store, publicOrigin: config.publicOrigin,
       resource: `${config.publicOrigin}/mcp`, ownerSecretHash: config.ownerSecretHash, clients: config.clients });
-    const callTool = createGateway({ origin: config.upstreamOrigin, whoopBearer });
+    const callTool = createGateway({ origin: config.upstreamOrigin, whoopBearer, fetchImpl });
     const server = createGatewayServer({ publicOrigin: config.publicOrigin, auth, store, callTool });
-    // The TLS ingress must share this network namespace and overwrite Host.
-    // Never bind public ingress or trust forwarded identity headers here.
+    // The TLS ingress must share this network namespace. The server validates
+    // Host itself; never bind public ingress or trust forwarded identity headers.
     server.listen(config.port, "127.0.0.1");
     return { server, store };
   } catch (error) { store.close(); throw error; }

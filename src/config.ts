@@ -16,6 +16,7 @@ export interface AppConfig {
   databaseUrl: string; encryptionKey: string;
   whoopClientId: string; whoopClientSecret: string;
   publicBaseUrl: string; port: number; sessionSecret: string;
+  bindHost: "127.0.0.1" | "::1"; runMigrations: boolean;
   allowedWhoopUserId: string;
   approvedClientRedirectUris: string[];
   enableLegacyDirectMcp: boolean;
@@ -30,6 +31,8 @@ const Schema = z.object({
   PUBLIC_BASE_URL: httpsOrigin,
   ENABLE_LEGACY_DIRECT_MCP: z.enum(["false", "true"]).default("false"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
+  BIND_HOST: z.enum(["127.0.0.1", "::1"]).default("127.0.0.1"),
+  RUN_MIGRATIONS: z.enum(["false", "true"]).default("false"),
   SESSION_SECRET: z.string().min(32),
   ALLOWED_WHOOP_USER_ID: z.string().regex(/^[1-9][0-9]{0,15}$/).refine((v) => Number.isSafeInteger(Number(v))),
   APPROVED_CLIENT_REDIRECT_URIS: z.array(httpsCallback).max(8),
@@ -45,6 +48,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     databaseUrl: p.DATABASE_URL, encryptionKey: p.ENCRYPTION_KEY,
     whoopClientId: p.WHOOP_CLIENT_ID, whoopClientSecret: p.WHOOP_CLIENT_SECRET,
     publicBaseUrl: p.PUBLIC_BASE_URL, port: p.PORT, sessionSecret: p.SESSION_SECRET,
+    bindHost: p.BIND_HOST, runMigrations: p.RUN_MIGRATIONS === "true",
     allowedWhoopUserId: p.ALLOWED_WHOOP_USER_ID,
     approvedClientRedirectUris: p.APPROVED_CLIENT_REDIRECT_URIS,
     enableLegacyDirectMcp: p.ENABLE_LEGACY_DIRECT_MCP === "true",

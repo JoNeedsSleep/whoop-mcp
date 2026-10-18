@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { createUnixFetch } from "./unix-https.mjs";
 
 export const AUTH_TTL_MS = 7 * 86400000;
 export const CALLBACKS = Object.freeze({ codex: "http://127.0.0.1:17643/callback", "claude-code": "http://localhost:17644/callback" });
@@ -10,12 +11,21 @@ export function exact(value, keys) {
     Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 export function parseLocalConfig(value) {
-  if (!exact(value, ["clientId", "origin", "tokenFile", "cacheFile", "stateFile"]) || !Object.hasOwn(CALLBACKS, value.clientId)) fail();
+  const keys = ["clientId", "origin", "tokenFile", "cacheFile", "stateFile"];
+  if (!value || !exact(value, Object.hasOwn(value, "transport") ? [...keys, "transport"] : keys) ||
+      (Object.hasOwn(value, "transport") && value.transport !== "unix") || !Object.hasOwn(CALLBACKS, value.clientId)) fail();
   const origin = new URL(value.origin);
   if (origin.protocol !== "https:" || origin.origin !== value.origin || origin.username || origin.password) fail();
   const files = [value.tokenFile, value.cacheFile, value.stateFile];
   if (new Set(files).size !== files.length || files.some((file) => typeof file !== "string" || !path.isAbsolute(file) || path.normalize(file) !== file || file.includes("\0"))) fail();
-  return { clientId: value.clientId, origin: value.origin, tokenFile: value.tokenFile, cacheFile: value.cacheFile, stateFile: value.stateFile };
+  if (value.transport === "unix" && origin.port) fail();
+  return { clientId: value.clientId, origin: value.origin, tokenFile: value.tokenFile, cacheFile: value.cacheFile, stateFile: value.stateFile,
+    ...(value.transport === "unix" ? { transport: "unix" } : {}) };
+}
+// Only trusted startup configuration chooses this transport. There is no
+// socket-path, CA override or proxy supplied by the model or remote response.
+export function configuredFetch(config) {
+  return config.transport === "unix" ? createUnixFetch({ origin: config.origin, socketPath: "/transport/gateway.sock" }) : fetch;
 }
 export function privateParent(filename) {
   if (typeof filename !== "string" || !path.isAbsolute(filename) || path.normalize(filename) !== filename) fail();

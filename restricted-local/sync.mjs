@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { boundedJson, parseLocalConfig, parseToken, privateParent, privateStat, readLocalConfig, readPrivateJson, RemoteFailure } from "./config.mjs";
+import { boundedJson, configuredFetch, parseLocalConfig, parseToken, privateParent, privateStat, readLocalConfig, readPrivateJson, RemoteFailure } from "./config.mjs";
 import { validateSnapshot } from "./policy.mjs";
 import { CACHE_TTL_MS, writeCache } from "./cache.mjs";
 
@@ -31,9 +31,10 @@ function invalidate(filename) {
   try { privateStat(fs.lstatSync(filename), 16384); fs.unlinkSync(filename); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
 }
-export async function syncOnce(rawConfig, { fetchImpl = fetch, now = Date.now } = {}) {
+export async function syncOnce(rawConfig, { fetchImpl, now = Date.now } = {}) {
   try {
     const config = parseLocalConfig(rawConfig); const startedAt = now();
+    fetchImpl ??= configuredFetch(config);
     const token = parseToken(readPrivateJson(config.tokenFile, 4096), config, startedAt);
     if (!acquireSyncAttempt(config.stateFile, startedAt)) return { status: "limited" };
     let raw;

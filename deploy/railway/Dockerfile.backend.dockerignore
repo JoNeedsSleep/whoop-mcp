@@ -1,0 +1,15 @@
+*
+!deploy/
+!deploy/railway/
+!deploy/railway/Dockerfile.backend
+!deploy/railway/Dockerfile.backend.dockerignore
+!deploy/railway/config.mjs
+!deploy/railway/tailscale-supervisor.mjs
+!deploy/railway/runtime.mjs
+!backend-artifact/
+!backend-artifact/package.json
+!backend-artifact/node_modules/**
+!backend-artifact/dist/**
+!backend-artifact/web/
+!backend-artifact/web/dist/**
+!backend-artifact/drizzle/**

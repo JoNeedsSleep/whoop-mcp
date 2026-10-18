@@ -8,6 +8,16 @@ describe("single-user configuration", () => {
     expect(loadConfig(base).enableLegacyDirectMcp).toBe(false);
     expect(loadConfig(base).approvedClientRedirectUris).toEqual([]);
     expect(loadConfig(base).allowedWhoopUserId).toBe("42");
+    expect(loadConfig(base).bindHost).toBe("127.0.0.1");
+    expect(loadConfig(base).runMigrations).toBe(false);
+  });
+  it("allows only loopback listeners and explicit migration opt-in", () => {
+    for (const host of ["0.0.0.0", "::", "localhost", "100.80.0.1", ""]) {
+      expect(() => loadConfig({ ...base, BIND_HOST: host })).toThrow();
+    }
+    expect(loadConfig({ ...base, BIND_HOST: "::1" }).bindHost).toBe("::1");
+    expect(loadConfig({ ...base, RUN_MIGRATIONS: "true" }).runMigrations).toBe(true);
+    expect(() => loadConfig({ ...base, RUN_MIGRATIONS: "yes" })).toThrow();
   });
   it("fails closed without the specific WHOOP identity", () => {
     expect(() => loadConfig({ ...base, ALLOWED_WHOOP_USER_ID: undefined })).toThrow();

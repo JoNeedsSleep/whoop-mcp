@@ -1,0 +1,13 @@
+# Build explicitly with --platform=linux/amd64 for Railway. Both bases are
+# immutable architecture-specific manifests; verify the resulting architecture.
+FROM tailscale/tailscale@sha256:99691662a2e82fbfd2bf55db0fd52bacd2f4664ce6fd1deca3746a024144a2b7 AS tailscale
+FROM node@sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562
+WORKDIR /app
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
+COPY deploy/railway/config.mjs deploy/railway/tailscale-supervisor.mjs deploy/railway/runtime.mjs ./deploy/railway/
+COPY restricted-local/fixed-relay.mjs restricted-local/unix-https.mjs ./restricted-local/
+COPY review-gateway/gateway.mjs review-gateway/auth.mjs review-gateway/store.mjs review-gateway/server.mjs review-gateway/config.mjs review-gateway/index.mjs ./review-gateway/
+USER node
+ENV NODE_ENV=production
+ENTRYPOINT ["/usr/local/bin/node", "/app/deploy/railway/runtime.mjs"]
+CMD ["/data/config/runtime.json"]
