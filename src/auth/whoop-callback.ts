@@ -1,12 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import { Router, type Request, type Response } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { schema } from "../db/client.js";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { TokenStore } from "./token-store.js";
 import type { CredentialProvider } from "../whoop/credentials.js";
 import { exchangeCodeForTokens } from "../whoop/oauth.js";
 import { WhoopClient } from "../whoop/client.js";
+import { BROWSER_COOKIE_OPTIONS, browserMatchesFlow, flowCookieName } from "./browser-binding.js";
 import type { PendingPayload } from "./oauth-provider.js";
 
 type Db = NodePgDatabase<typeof schema>;
@@ -40,22 +41,14 @@ export function createWhoopCallbackRouter(deps: CallbackDeps): Router {
     const code = typeof req.query.code === "string" ? req.query.code : undefined;
     const error = typeof req.query.error === "string" ? req.query.error : undefined;
 
-    if (error) {
-      res.status(400).send("WHOOP authorization failed.");
-      return;
+    if (!state || !/^[A-Za-z0-9_-]{43}$/.test(state) || (!error && (!code || code.length > 2048))) {
+      res.status(400).send("Missing state or code."); return;
     }
-    if (!state || !/^[A-Za-z0-9_-]{43}$/.test(state) || !code || code.length > 2048) {
-      res.status(400).send("Missing state or code.");
-      return;
-    }
-
-    const [pending] = await deps.db
-      .delete(schema.pendingAuthorizations)
-      .where(eq(schema.pendingAuthorizations.whoopState, state)).returning();
-
+    // Read first: an unrelated browser must not consume a legitimate pending flow.
+    const [pending] = await deps.db.select().from(schema.pendingAuthorizations)
+      .where(eq(schema.pendingAuthorizations.whoopState, state));
     if (!pending || pending.expiresAt.getTime() <= Date.now()) {
-      res.status(400).send("Unknown or expired authorization request.");
-      return;
+      res.status(400).send("Unknown or expired authorization request."); return;
     }
 
     const payload = pending.payload as PendingPayload;
@@ -66,13 +59,28 @@ export function createWhoopCallbackRouter(deps: CallbackDeps): Router {
       res.status(400).send("Invalid authorization request."); return;
     }
 
+    if (!browserMatchesFlow(req.headers.cookie, state, payload.browserBindingHash)) {
+      res.status(403).send("Authorization browser mismatch."); return;
+    }
+    // Only the bound browser may consume state. DELETE RETURNING still ensures
+    // concurrent callbacks can exchange the WHOOP code at most once.
+    const consumed = await deps.db.delete(schema.pendingAuthorizations)
+      .where(and(eq(schema.pendingAuthorizations.whoopState, state),
+        gt(schema.pendingAuthorizations.expiresAt, new Date()))).returning();
+    if (consumed.length !== 1) {
+      res.status(400).send("Unknown or expired authorization request."); return;
+    }
+    // Sent with the callback's success/failure response, after binding verification.
+    res.clearCookie(flowCookieName(state), BROWSER_COOKIE_OPTIONS);
+    if (error) { res.status(400).send("WHOOP authorization failed."); return; }
+
     // Convert upstream failures to a fixed response. Never log token/code values.
     try {
       const creds = await deps.credentials.getClientCredentials();
       const redirectUri = `${deps.publicBaseUrl}/whoop/callback`;
 
       const tokenSet = await exchangeCodeForTokens(
-        code,
+        code!,
         redirectUri,
         creds,
         payload.whoopCodeVerifier,

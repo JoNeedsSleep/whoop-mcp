@@ -11,10 +11,14 @@ function withCode(patch = {}) {
   const row = { clientId: "client-1", userId: "u1", redirectUri: uri, codeChallenge: pkceChallenge(verifier), scopes: ["mcp"], expiresAt: new Date(Date.now() + 60000), ...patch };
   let available = true;
   const issueMcpToken = vi.fn(async () => "tok");
-  const db = { delete: () => ({ where: () => ({ returning: async () => {
-    if (!available) return []; available = false; return [row];
-  } }) }) };
-  return { issueMcpToken, p: new WhoopOAuthProvider({ ...base, tokenStore: { issueMcpToken } as any, db: db as any }) };
+  const redeemAuthorizationCode = vi.fn(async (_hash: string, validate: (row: any) => void) => {
+    if (!available) return null;
+    available = false;
+    await validate(row);
+    return issueMcpToken();
+  });
+  return { issueMcpToken, p: new WhoopOAuthProvider({ ...base,
+    tokenStore: { redeemAuthorizationCode } as any, db: {} as any }) };
 }
 describe("authorization code redemption", () => {
   it("mints once under concurrent redemption and returns a fixed TTL", async () => {
@@ -55,7 +59,7 @@ describe("bearer expiry and registrations", () => {
     expect(insert).not.toHaveBeenCalled();
   });
   it("renders browser-bound per-client consent before requesting WHOOP authorization", async () => {
-    const values = vi.fn(async () => {});
+    const values = vi.fn(async (_row: any) => {});
     const res: any = { cookie: vi.fn(), set: vi.fn(), type: vi.fn(() => res), send: vi.fn(), redirect: vi.fn() };
     const p = new WhoopOAuthProvider({ ...base, tokenStore: {} as any, db: { insert: () => ({ values }) } as any });
     await p.authorize({ ...client, client_name: "<script>attack</script>" }, { redirectUri: uri, codeChallenge: pkceChallenge(verifier) }, res);

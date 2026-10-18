@@ -11,6 +11,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { OAUTH_TOKEN_TTL_SECONDS, type TokenStore } from "./token-store.js";
 import type { CredentialProvider } from "../whoop/credentials.js";
 import { buildAuthorizeUrl } from "../whoop/oauth.js";
+import { BROWSER_COOKIE_OPTIONS, FLOW_TTL_MS, flowCookieName, nonceHash } from "./browser-binding.js";
 import { httpsCallback } from "../config.js";
 
 type Db = NodePgDatabase<typeof schema>;
@@ -25,9 +26,9 @@ export const DASHBOARD_CLIENT_ID = "whoop-mcp-dashboard";
 const sha256hex = (raw: string) => createHash("sha256").update(raw).digest("hex");
 export const pkceChallenge = (verifier: string) => createHash("sha256").update(verifier).digest("base64url");
 const random = () => randomBytes(32).toString("base64url");
-const PENDING_TTL_MS = 10 * 60_000;
+const PENDING_TTL_MS = FLOW_TTL_MS;
 const CONSENT_COOKIE = "__Host-whoop_consent";
-const cookieOptions = { secure: true, httpOnly: true, sameSite: "lax" as const, path: "/" };
+const cookieOptions = BROWSER_COOKIE_OPTIONS;
 const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 export interface PendingPayload extends Record<string, unknown> {
@@ -39,6 +40,7 @@ export interface PendingPayload extends Record<string, unknown> {
   scopes: string[];
   whoopCodeVerifier: string;
   consentHash?: string;
+  browserBindingHash?: string;
 }
 
 export class WhoopOAuthProvider implements OAuthServerProvider {
@@ -143,23 +145,29 @@ export class WhoopOAuthProvider implements OAuthServerProvider {
       const consumed = await this.deps.db.delete(schema.pendingAuthorizations)
         .where(eq(schema.pendingAuthorizations.whoopState, state)).returning();
       if (consumed.length !== 1) { res.status(403).send("Consent already used."); return; }
-      res.clearCookie(CONSENT_COOKIE, cookieOptions);
       if (decision === "deny") {
+        res.clearCookie(CONSENT_COOKIE, cookieOptions);
         const redirect = new URL(payload.clientRedirectUri);
         redirect.searchParams.set("error", "access_denied");
         if (payload.clientState !== undefined) redirect.searchParams.set("state", payload.clientState);
         res.redirect(302, redirect.toString()); return;
       }
-      await this.startWhoop({ ...payload, stage: "whoop", consentHash: undefined }, res);
+      // Carry the same nonce from the validated consent browser into a cookie
+      // specific to the WHOOP state. Do not drop the binding at this transition.
+      res.clearCookie(CONSENT_COOKIE, cookieOptions);
+      await this.startWhoop({ ...payload, stage: "whoop" }, res, csrf);
     });
     return router;
   }
 
-  private async startWhoop(payload: PendingPayload, res: Response): Promise<void> {
+  private async startWhoop(payload: PendingPayload, res: Response, browserNonce = random()): Promise<void> {
     const whoopState = random();
-    await this.deps.db.insert(schema.pendingAuthorizations).values({ whoopState, payload,
+    const boundPayload: PendingPayload = { ...payload, browserBindingHash: nonceHash(browserNonce) };
+    await this.deps.db.insert(schema.pendingAuthorizations).values({ whoopState, payload: boundPayload,
       expiresAt: new Date(Date.now() + PENDING_TTL_MS) });
     const creds = await this.deps.credentials.getClientCredentials();
+    // Dashboard login also gets a browser binding before the WHOOP leg.
+    res.cookie(flowCookieName(whoopState), browserNonce, { ...cookieOptions, maxAge: PENDING_TTL_MS });
     res.redirect(302, buildAuthorizeUrl({ clientId: creds.clientId,
       redirectUri: `${this.deps.publicBaseUrl}/whoop/callback`, state: whoopState,
       codeChallenge: pkceChallenge(payload.whoopCodeVerifier) }));
@@ -176,19 +184,18 @@ export class WhoopOAuthProvider implements OAuthServerProvider {
 
   async exchangeAuthorizationCode(client: OAuthClientInformationFull, code: string,
     codeVerifier?: string, redirectUri?: string): Promise<OAuthTokens> {
-    // DELETE RETURNING is atomic: parallel redemptions cannot both mint a token.
-    const [row] = await this.deps.db.delete(schema.oauthAuthCodes)
-      .where(eq(schema.oauthAuthCodes.codeHash, sha256hex(code))).returning();
-    if (!row || row.clientId !== client.client_id || row.expiresAt.getTime() <= Date.now() ||
-        !codeVerifier || !/^[A-Za-z0-9._~-]{43,128}$/.test(codeVerifier) ||
-        pkceChallenge(codeVerifier) !== row.codeChallenge) {
-      throw new InvalidGrantError("Invalid authorization code or PKCE verifier");
-    }
-    if (redirectUri !== undefined && redirectUri !== row.redirectUri) throw new InvalidGrantError("redirect_uri does not match");
-    if (client.client_id !== DASHBOARD_CLIENT_ID && !this.approved(row.redirectUri)) {
-      throw new InvalidGrantError("Callback no longer approved");
-    }
-    const accessToken = await this.deps.tokenStore.issueMcpToken(row.userId, "oauth", undefined, client.client_id);
+    const accessToken = await this.deps.tokenStore.redeemAuthorizationCode(sha256hex(code), (row) => {
+      if (row.clientId !== client.client_id || row.expiresAt.getTime() <= Date.now() ||
+          !codeVerifier || !/^[A-Za-z0-9._~-]{43,128}$/.test(codeVerifier) ||
+          pkceChallenge(codeVerifier) !== row.codeChallenge) {
+        throw new InvalidGrantError("Invalid authorization code or PKCE verifier");
+      }
+      if (redirectUri !== undefined && redirectUri !== row.redirectUri) throw new InvalidGrantError("redirect_uri does not match");
+      if (client.client_id !== DASHBOARD_CLIENT_ID && !this.approved(row.redirectUri)) {
+        throw new InvalidGrantError("Callback no longer approved");
+      }
+    });
+    if (!accessToken) throw new InvalidGrantError("Invalid or revoked authorization code");
     return { access_token: accessToken, token_type: "bearer", expires_in: OAUTH_TOKEN_TTL_SECONDS, scope: "mcp" };
   }
 

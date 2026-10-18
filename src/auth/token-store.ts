@@ -7,6 +7,8 @@ import type { WhoopTokenSet } from "../whoop/types.js";
 
 export type RefreshFn = (refreshToken: string) => Promise<WhoopTokenSet>;
 type Db = NodePgDatabase<typeof schema>;
+type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
+export type AuthorizationCode = typeof schema.oauthAuthCodes.$inferSelect;
 const hashToken = (raw: string) => createHash("sha256").update(raw).digest("hex");
 const EXPIRY_SKEW_MS = 60_000;
 export const OAUTH_TOKEN_TTL_SECONDS = 3600;
@@ -83,13 +85,45 @@ export class TokenStore {
     return refreshed.accessToken;
   }
 
-  async issueMcpToken(userId: string, type: "oauth" | "pat", label?: string, clientId?: string): Promise<string> {
-    if (this.allowedWhoopUserId && !await this.isAllowedUser(userId)) throw new Error("Account not allowed");
+  private async lockTokenUser(tx: Transaction, userId: string): Promise<void> {
+    // Every token issuer and revoke-all uses this same row and lock order.
+    const [user] = await tx.select().from(schema.users).where(eq(schema.users.id, userId)).for("update");
+    if (!user || (this.allowedWhoopUserId && user.whoopUserId !== this.allowedWhoopUserId)) {
+      throw new Error("Account not allowed");
+    }
+  }
+
+  private async insertMcpToken(tx: Transaction, userId: string, type: "oauth" | "pat", label?: string, clientId?: string): Promise<string> {
     const raw = `whoopmcp_${type}_${randomBytes(32).toString("base64url")}`;
     const ttl = type === "oauth" ? OAUTH_TOKEN_TTL_SECONDS : PAT_TOKEN_TTL_SECONDS;
-    await this.db.insert(schema.mcpTokens).values({ tokenHash: hashToken(raw), userId, type, label,
+    await tx.insert(schema.mcpTokens).values({ tokenHash: hashToken(raw), userId, type, label,
       clientId: clientId ?? null, expiresAt: new Date(Date.now() + ttl * 1000) });
     return raw;
+  }
+
+  async issueMcpToken(userId: string, type: "oauth" | "pat", label?: string, clientId?: string): Promise<string> {
+    return this.db.transaction(async (tx) => {
+      await this.lockTokenUser(tx, userId);
+      return this.insertMcpToken(tx, userId, type, label, clientId);
+    });
+  }
+
+  async redeemAuthorizationCode(codeHash: string, validate: (row: AuthorizationCode) => void | Promise<void>): Promise<string | null> {
+    // A non-locking read discovers the user; it never grants access. After taking
+    // the user lock we re-read by atomically deleting the still-present code.
+    const [candidate] = await this.db.select().from(schema.oauthAuthCodes)
+      .where(eq(schema.oauthAuthCodes.codeHash, codeHash));
+    if (!candidate) return null;
+    return this.db.transaction(async (tx) => {
+      await this.lockTokenUser(tx, candidate.userId);
+      const [row] = await tx.delete(schema.oauthAuthCodes).where(and(
+        eq(schema.oauthAuthCodes.codeHash, codeHash), eq(schema.oauthAuthCodes.userId, candidate.userId),
+      )).returning();
+      if (!row) return null; // revoke-all or another exchange won the user lock
+      await validate(row);
+      // Consumption and issuance commit together while the user lock is held.
+      return this.insertMcpToken(tx, row.userId, "oauth", undefined, row.clientId);
+    });
   }
 
   async resolveMcpToken(raw: string): Promise<{ userId: string; clientId: string; expiresAt: Date } | null> {
@@ -143,6 +177,7 @@ export class TokenStore {
 
   async revokeAllMcpTokens(userId: string): Promise<void> {
     await this.db.transaction(async (tx) => {
+      await this.lockTokenUser(tx, userId);
       await tx.update(schema.mcpTokens).set({ revokedAt: new Date() })
         .where(eq(schema.mcpTokens.userId, userId));
       await tx.delete(schema.oauthAuthCodes).where(eq(schema.oauthAuthCodes.userId, userId));

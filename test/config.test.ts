@@ -5,6 +5,7 @@ const base = { DATABASE_URL: "postgres://x", ENCRYPTION_KEY: "a".repeat(64),
   SESSION_SECRET: "s".repeat(32), ALLOWED_WHOOP_USER_ID: "42" };
 describe("single-user configuration", () => {
   it("defaults to no approved MCP callbacks", () => {
+    expect(loadConfig(base).enableLegacyDirectMcp).toBe(false);
     expect(loadConfig(base).approvedClientRedirectUris).toEqual([]);
     expect(loadConfig(base).allowedWhoopUserId).toBe("42");
   });
@@ -24,5 +25,9 @@ describe("single-user configuration", () => {
     for (const uri of ["https://*.example/cb", "http://client.example/cb", "https://client.example/cb#x"]) {
       expect(() => loadConfig({ ...base, APPROVED_CLIENT_REDIRECT_URIS: uri })).toThrow();
     }
+  });
+  it("requires explicit true to opt into legacy direct MCP", () => {
+    expect(loadConfig({ ...base, ENABLE_LEGACY_DIRECT_MCP: "true" }).enableLegacyDirectMcp).toBe(true);
+    expect(() => loadConfig({ ...base, ENABLE_LEGACY_DIRECT_MCP: "yes" })).toThrow();
   });
 });

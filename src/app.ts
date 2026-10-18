@@ -55,7 +55,9 @@ export function createApp(config: AppConfig): express.Express {
       res.json(await healthSummary(client, date));
     } catch { res.status(502).json({ error: "HEALTH_DATA_UNAVAILABLE" }); }
   });
-  app.all("/mcp", auth, async (req, res) => {
+  // This legacy transport forwards raw WHOOP records. Never enable it for the
+  // intended gateway boundary; opt-in exists only for separately reviewed legacy use.
+  if (config.enableLegacyDirectMcp === true) app.all("/mcp", auth, async (req, res) => {
     try {
       const mcpServer = buildMcpServer({ tokenStore, credentials });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });

@@ -21,10 +21,15 @@ describe("app", () => {
     expect(r.body.token_endpoint).toBeTruthy();
   });
 
-  it("rejects /mcp without a bearer token", async () => {
+  it("does not expose the legacy direct MCP route by default", async () => {
     const r = await request(createApp(cfg))
       .post("/mcp")
       .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    expect(r.status).toBe(404);
+  });
+  it("requires authentication even when legacy direct MCP is explicitly enabled", async () => {
+    const r = await request(createApp({ ...cfg, enableLegacyDirectMcp: true }))
+      .post("/mcp").send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
     expect(r.status).toBe(401);
   });
 });

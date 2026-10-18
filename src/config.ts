@@ -18,6 +18,7 @@ export interface AppConfig {
   publicBaseUrl: string; port: number; sessionSecret: string;
   allowedWhoopUserId: string;
   approvedClientRedirectUris: string[];
+  enableLegacyDirectMcp: boolean;
 }
 
 const Schema = z.object({
@@ -26,6 +27,7 @@ const Schema = z.object({
   WHOOP_CLIENT_ID: z.string().min(1),
   WHOOP_CLIENT_SECRET: z.string().min(1),
   PUBLIC_BASE_URL: httpsOrigin,
+  ENABLE_LEGACY_DIRECT_MCP: z.enum(["false", "true"]).default("false"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
   SESSION_SECRET: z.string().min(32),
   ALLOWED_WHOOP_USER_ID: z.string().regex(/^[1-9][0-9]{0,15}$/).refine((v) => Number.isSafeInteger(Number(v))),
@@ -43,5 +45,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     publicBaseUrl: p.PUBLIC_BASE_URL, port: p.PORT, sessionSecret: p.SESSION_SECRET,
     allowedWhoopUserId: p.ALLOWED_WHOOP_USER_ID,
     approvedClientRedirectUris: p.APPROVED_CLIENT_REDIRECT_URIS,
+    enableLegacyDirectMcp: p.ENABLE_LEGACY_DIRECT_MCP === "true",
   };
 }

@@ -202,7 +202,8 @@ describe("TokenStore.listMcpTokens / revokeMcpTokenById (fake db)", () => {
   });
 });
 
-const url = process.env.DATABASE_URL;
+// Explicit disposable-test opt-in; never inherit a runtime DATABASE_URL.
+const url = process.env.WHOOP_TEST_DB_DISPOSABLE === "true" ? process.env.WHOOP_TEST_DATABASE_URL : undefined;
 
 describe.skipIf(!url)("TokenStore integration (real db)", () => {
   it("upsertUserAndTokens then getValidAccessToken round-trips through Postgres", async () => {
@@ -342,7 +343,11 @@ describe("fixed bearer lifetime (fake db)", () => {
   });
   it("issues one-hour OAuth and seven-day PAT credentials with stored expiry", async () => {
     const values = vi.fn(async (_row: any) => {});
-    const store = new TokenStore({ insert: () => ({ values }) } as any, key, vi.fn());
+    const tx = {
+      select: () => ({ from: () => ({ where: () => ({ for: async () => [{ id: "u" }] }) }) }),
+      insert: () => ({ values }),
+    };
+    const store = new TokenStore({ transaction: async (fn: any) => fn(tx) } as any, key, vi.fn());
     const before = Date.now();
     await store.issueMcpToken("u", "oauth", undefined, "client-1");
     await store.issueMcpToken("u", "pat");
@@ -351,4 +356,33 @@ describe("fixed bearer lifetime (fake db)", () => {
     expect(values.mock.calls[1][0].expiresAt.getTime() - before).toBeGreaterThanOrEqual(7 * 86400000);
     expect(values.mock.calls[0][0].clientId).toBe("client-1");
   });
+});
+
+it("holds the user lock across code validation, consumption and token insertion", async () => {
+  const events: string[] = [];
+  const row = { userId: "u", clientId: "client", codeHash: "hash" };
+  const tx = {
+    select: () => ({ from: () => ({ where: () => ({ for: async () => { events.push("lock"); return [{ id: "u" }]; } }) }) }),
+    delete: () => ({ where: () => ({ returning: async () => { events.push("consume"); return [row]; } }) }),
+    insert: () => ({ values: async () => { events.push("issue"); } }),
+  };
+  const db = {
+    select: () => ({ from: () => ({ where: async () => [row] }) }),
+    transaction: async (fn: any) => { events.push("begin"); const result = await fn(tx); events.push("commit"); return result; },
+  };
+  const store = new TokenStore(db as any, key, vi.fn());
+  await store.redeemAuthorizationCode("hash", () => { events.push("validate"); });
+  expect(events).toEqual(["begin", "lock", "consume", "validate", "issue", "commit"]);
+});
+
+it("revoke-all acquires the same user lock before touching tokens or codes", async () => {
+  const events: string[] = [];
+  const tx = {
+    select: () => ({ from: () => ({ where: () => ({ for: async () => { events.push("lock"); return [{ id: "u" }]; } }) }) }),
+    update: () => ({ set: () => ({ where: async () => { events.push("revoke"); } }) }),
+    delete: () => ({ where: async () => { events.push("delete-codes"); } }),
+  };
+  const store = new TokenStore({ transaction: async (fn: any) => fn(tx) } as any, key, vi.fn());
+  await store.revokeAllMcpTokens("u");
+  expect(events).toEqual(["lock", "revoke", "delete-codes"]);
 });
