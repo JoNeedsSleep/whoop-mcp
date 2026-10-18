@@ -1,0 +1,19 @@
+:root { color-scheme: light; }
+body { margin: 24px; background: #fff; color: #000; font: 15px/1.4 Arial, Helvetica, sans-serif; }
+main { max-width: 850px; }
+header { border-bottom: 1px solid #999; padding-bottom: 9px; }
+h1 { margin: 0 0 6px; font: bold 30px/1.2 "Times New Roman", Times, serif; }
+nav { font-size: 14px; }
+a { color: #0000ee; text-decoration: underline; }
+a:visited { color: #551a8b; }
+.note { margin: 12px 0 24px; color: #555; font-size: 12px; }
+.table-scroll { overflow-x: auto; }
+table { border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+caption { margin-bottom: 8px; text-align: left; font-weight: bold; font-size: 14px; }
+th, td { border: 1px solid #999; padding: 7px 12px; white-space: nowrap; }
+thead th { background: #eee; vertical-align: top; text-align: center; }
+thead span { font-weight: normal; }
+tbody th { font-weight: normal; text-align: left; }
+td { text-align: right; }
+:focus-visible { outline: 2px solid #0000ee; outline-offset: 2px; }
+@media (max-width: 600px) { body { margin: 16px; } th, td { padding: 6px 9px; } }
