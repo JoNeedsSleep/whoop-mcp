@@ -34,7 +34,7 @@ const AUTH_CODE_TTL_MS = 5 * 60_000;
 
 export function createWhoopCallbackRouter(deps: CallbackDeps): Router {
   const router = Router();
-  const fetchImpl = deps.fetchImpl ?? fetch;
+  const fetchImpl = deps.fetchImpl;
 
   router.get("/whoop/callback", async (req: Request, res: Response) => {
     const state = typeof req.query.state === "string" ? req.query.state : undefined;

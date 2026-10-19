@@ -6,6 +6,9 @@
 !deploy/railway/config.mjs
 !deploy/railway/tailscale-supervisor.mjs
 !deploy/railway/runtime.mjs
+!deploy/railway/gateway-runtime.mjs
+!deploy/staging/
+!deploy/staging/runtime-check.mjs
 !restricted-local/
 !restricted-local/fixed-relay.mjs
 !restricted-local/unix-https.mjs

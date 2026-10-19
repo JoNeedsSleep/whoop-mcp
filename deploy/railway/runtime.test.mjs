@@ -6,7 +6,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { backendEnvironment, parseDeploymentConfig, readPrivateJson, tailnetHostname, tailnetIpv4 } from './config.mjs';
-import { childEnvironment, expectedServe, readEnrollmentKey, startTailscale, validatePersistedState, validateServe } from './tailscale-supervisor.mjs';
+import { childEnvironment, daemonEnvironment, expectedServe, readEnrollmentKey, runCommand, startTailscale, validatePersistedState, validateServe } from './tailscale-supervisor.mjs';
 import { startDeployment, validateAppConfig } from './runtime.mjs';
 import { startLocalTransport } from '../../restricted-local/transport-supervisor.mjs';
 
@@ -26,8 +26,9 @@ function fixture(t, local = true, serve = {}) {
   fs.writeFileSync(filename, JSON.stringify(state), { mode: 0o600 });
   return { directory, filename, state };
 }
-function fakeNode({ tag = 'tag:whoop-local-codex', hostname, serving = {}, enrolled = true, poisonPrefs, failAt } = {}) {
+function fakeNode({ tag = 'tag:whoop-local-codex', hostname, serving = {}, enrolled = true, poisonPrefs, failAt, statusSequence = [] } = {}) {
   const calls = []; let current = enrolled ? status(tag, hostname) : { BackendState: 'NeedsLogin' }; let serve = serving;
+  const statuses = structuredClone(statusSequence);
   const child = new EventEmitter(); child.exitCode = null; child.signalCode = null;
   child.kill = signal => { child.signalCode = signal; child.emit('exit', null, signal); child.emit('close', null, signal); };
   const spawnFn = (binary, args, options) => { calls.push({ binary, args, options }); return child; };
@@ -37,7 +38,7 @@ function fakeNode({ tag = 'tag:whoop-local-codex', hostname, serving = {}, enrol
     if (args[0] === 'version') return '1.104.1\n';
     const cmd = args.slice(1);
     if (cmd[0] === 'up') { current = status(tag, hostname); return ''; }
-    if (cmd[0] === 'status') return JSON.stringify(current);
+    if (cmd[0] === 'status') { if (statuses.length) current = statuses.shift(); return JSON.stringify(current); }
     if (cmd[0] === 'debug') return JSON.stringify(poisonPrefs ?? prefs(tag.startsWith('tag:whoop-local-')));
     if (cmd[0] === 'serve' && cmd[1] === 'reset') serve = {};
     if (cmd[0] === 'serve' && cmd[1] === '--bg') serve = expectedServe(hostname, tag === 'tag:whoop-gateway' ? 8787 : 8080);
@@ -87,11 +88,42 @@ test('userspace daemon gets fixed commands, stripped env, private admin socket a
   const { directory } = fixture(t); const fake = fakeNode();
   const runtime = await startTailscale({ stateDirectory: directory, tag: 'tag:whoop-local-codex' }, fake);
   const daemon = fake.calls.find(c => c.binary.endsWith('tailscaled'));
-  assert.deepEqual(daemon.options.env, childEnvironment); assert.equal(daemon.options.stdio, 'ignore');
+  assert.deepEqual(daemon.options.env, daemonEnvironment); assert.equal(daemon.options.stdio, 'ignore');
   assert.ok(daemon.args.includes('--tun=userspace-networking')); assert.ok(daemon.args.includes('--socks5-server=127.0.0.1:1055'));
   assert.ok(daemon.args.includes(`--socket=${directory}/tailscaled.sock`)); assert.ok(daemon.args.includes('--no-logs-no-support'));
   assert.ok(!fake.calls.some(c => c.args.includes('up') || c.args.includes('funnel') || c.args.includes('--bg')));
   await runtime.close(); assert.equal(fake.child.signalCode, 'SIGTERM');
+});
+test('daemon HTTP2 mitigation is fixed despite inherited overrides and never changes CLI environment', async t => {
+  const inherited = { GODEBUG: 'http2server=1,http2debug=2,x509usefallbackroots=1',
+    SSLKEYLOGFILE: '/tmp/synthetic-secret-log', TS_AUTHKEY: 'synthetic-secret-sentinel' };
+  const previous = Object.fromEntries(Object.keys(inherited).map(key => [key, process.env[key]]));
+  Object.assign(process.env, inherited);
+  try {
+    assert.deepEqual(daemonEnvironment, { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp',
+      TS_NO_LOGS_NO_SUPPORT: 'true', GODEBUG: 'http2server=0' });
+    assert.ok(Object.isFrozen(daemonEnvironment));
+    assert.equal(childEnvironment.GODEBUG, undefined);
+    const { directory } = fixture(t, false);
+    const fake = fakeNode({ tag: 'tag:whoop-gateway', hostname: remote.hostname });
+    const runtime = await startTailscale({ stateDirectory: directory, tag: 'tag:whoop-gateway', hostname: remote.hostname, port: 8787 }, fake);
+    try {
+      const daemon = fake.calls.find(call => call.binary.endsWith('tailscaled'));
+      assert.deepEqual(daemon.options.env, daemonEnvironment);
+      for (const key of ['SSLKEYLOGFILE', 'TS_AUTHKEY', 'SSH_AUTH_SOCK', 'HTTP_PROXY', 'HTTPS_PROXY']) assert.equal(daemon.options.env[key], undefined);
+      assert.ok(fake.calls.some(call => call.args.includes('--https=443')));
+    } finally { await runtime.close(); }
+    let cliOptions;
+    const result = await runCommand('/usr/local/bin/tailscale', ['version'], { spawnFn: (_binary, _args, options) => {
+      cliOptions = options; const child = new EventEmitter(); child.stdout = new EventEmitter(); child.kill = () => {};
+      queueMicrotask(() => { child.stdout.emit('data', Buffer.from('1.104.1\n')); child.emit('close', 0); });
+      return child;
+    } });
+    assert.equal(result, '1.104.1\n'); assert.deepEqual(cliOptions.env, childEnvironment);
+    assert.equal(cliOptions.env.GODEBUG, undefined); assert.equal(cliOptions.env.TS_AUTHKEY, undefined);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
 });
 test('remote Serve exposes exactly HTTPS443 and loopback target after verified settings', async t => {
   const { directory } = fixture(t, false);
@@ -101,6 +133,57 @@ test('remote Serve exposes exactly HTTPS443 and loopback target after verified s
   assert.deepEqual(serve.args.slice(1), ['serve', '--bg', '--yes', '--https=443', 'http://127.0.0.1:8787']);
   assert.ok(fake.calls.findIndex(c => c.args.includes('prefs')) < fake.calls.indexOf(serve));
   await runtime.close();
+});
+test('normal startup waits for both Running and online before configuring or serving', async t => {
+  const { directory } = fixture(t, false);
+  const ready = status('tag:whoop-gateway', remote.hostname);
+  const fake = fakeNode({ tag: 'tag:whoop-gateway', hostname: remote.hostname, statusSequence: [
+    { ...ready, Self: { ...ready.Self, Online: false } },
+    { ...ready, BackendState: 'Starting' }, ready,
+  ] });
+  let waits = 0;
+  const runtime = await startTailscale({ stateDirectory: directory, tag: 'tag:whoop-gateway', hostname: remote.hostname, port: 8787 }, {
+    ...fake, startupAttempts: 4, wait: async milliseconds => {
+      waits++; assert.equal(milliseconds, 500);
+      assert.ok(!fake.calls.some(call => ['set', 'debug', 'serve', 'up'].includes(call.args[1])));
+    },
+  });
+  assert.equal(waits, 2);
+  assert.equal(fake.calls.filter(call => call.args[1] === 'status').length, 4);
+  assert.ok(fake.calls.some(call => call.args.includes('--bg')));
+  await runtime.close();
+  assert.equal(fs.existsSync(path.join(directory, 'runtime.lock')), false);
+});
+test('permanently offline saved node exhausts bounded attempts without configuring or serving', async t => {
+  const { directory } = fixture(t, false);
+  const ready = status('tag:whoop-gateway', remote.hostname);
+  const fake = fakeNode({ tag: 'tag:whoop-gateway', hostname: remote.hostname,
+    statusSequence: [{ ...ready, Self: { ...ready.Self, Online: false } }] });
+  let waits = 0;
+  await assert.rejects(startTailscale({ stateDirectory: directory, tag: 'tag:whoop-gateway', hostname: remote.hostname, port: 8787 }, {
+    ...fake, startupAttempts: 3, wait: async () => { waits++; },
+  }), /PRIVATE_RUNTIME_UNAVAILABLE/);
+  assert.equal(waits, 3);
+  assert.equal(fake.calls.filter(call => call.args[1] === 'status').length, 3);
+  assert.ok(!fake.calls.some(call => ['set', 'debug', 'serve', 'up'].includes(call.args[1])));
+  assert.equal(fake.child.signalCode, 'SIGTERM');
+  assert.equal(fs.existsSync(path.join(directory, 'runtime.lock')), false);
+});
+test('online readiness still rejects a wrong tag or DNS name before configuring or serving', async t => {
+  const { directory } = fixture(t, false);
+  const ready = status('tag:whoop-gateway', remote.hostname);
+  for (const self of [{ ...ready.Self, Tags: ['tag:unrelated'] },
+    { ...ready.Self, DNSName: 'other.test-tailnet.ts.net.' }]) {
+    const fake = fakeNode({ tag: 'tag:whoop-gateway', hostname: remote.hostname, statusSequence: [{ ...ready, Self: self }] });
+    let waits = 0;
+    await assert.rejects(startTailscale({ stateDirectory: directory, tag: 'tag:whoop-gateway', hostname: remote.hostname, port: 8787 }, {
+      ...fake, startupAttempts: 3, wait: async () => { waits++; },
+    }), /PRIVATE_RUNTIME_UNAVAILABLE/);
+    assert.equal(waits, 0);
+    assert.ok(!fake.calls.some(call => ['set', 'debug', 'serve', 'up'].includes(call.args[1])));
+    assert.equal(fake.child.signalCode, 'SIGTERM');
+    assert.equal(fs.existsSync(path.join(directory, 'runtime.lock')), false);
+  }
 });
 test('wrong identity or unsafe effective settings stops daemon without publishing relay', async t => {
   const { directory } = fixture(t);

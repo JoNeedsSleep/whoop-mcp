@@ -1,15 +1,22 @@
+import { fetch as patchedFetch } from "undici";
+
 const API_BASE = "https://api.prod.whoop.com/developer";
-type FetchImpl = typeof fetch;
+// Use the explicitly pinned client, not Node's independently bundled Undici.
+// Keep injected fixtures limited to the request/response surface used here.
+type FetchResponse = Pick<Response, "ok" | "status" | "json"> & { headers: Pick<Headers, "get"> };
+type FetchImpl = (url: string, init: {
+  headers: Record<string, string>; redirect: "error"; signal: AbortSignal;
+}) => Promise<FetchResponse>;
 type Range = { start?: string; end?: string; limit?: number };
 
 export class WhoopClient {
   constructor(
     private getAccessToken: () => Promise<string>,
     private forceRefresh: (rejectedAccessToken: string) => Promise<string>,
-    private fetchImpl: FetchImpl = fetch,
+    private fetchImpl: FetchImpl = patchedFetch,
   ) {}
 
-  private async raw(path: string, query: Record<string, string> = {}, token?: string): Promise<Response> {
+  private async raw(path: string, query: Record<string, string> = {}, token?: string): Promise<FetchResponse> {
     const at = token ?? await this.getAccessToken();
     const url = new URL(API_BASE + path);
     for (const [k, v] of Object.entries(query)) if (v != null) url.searchParams.set(k, v);

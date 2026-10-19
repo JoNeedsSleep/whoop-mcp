@@ -71,6 +71,7 @@ describe("bearer expiry and registrations", () => {
     expect(res.send.mock.calls[0][0]).toContain("&lt;script&gt;");
     expect(values.mock.calls[0][0].payload.stage).toBe("consent");
     expect(res.cookie.mock.calls[0][2]).toMatchObject({ secure: true, httpOnly: true, path: "/" });
+    expect(res.set).toHaveBeenCalledWith(expect.objectContaining({ "Referrer-Policy": "strict-origin", "Cache-Control": "no-store" }));
   });
 });
 
@@ -104,13 +105,16 @@ it("preserves the locked SDK token-handler PKCE handoff", async () => {
   expect(issueMcpToken).toHaveBeenCalledTimes(1);
 });
 
-it("rejects a forged consent POST before touching pending state", async () => {
+it("rejects foreign, null and missing consent Origin before touching pending state", async () => {
   const select = vi.fn();
   const p = new WhoopOAuthProvider({ ...base, tokenStore: {} as any, db: { select } as any });
   const app = express(); app.use(express.urlencoded({ extended: false })); app.use(p.consentRouter());
-  const r = await request(app).post("/oauth/consent").set("Origin", "https://evil.example")
-    .type("form").send({ state: "s".repeat(43), csrf: "c".repeat(43), decision: "allow" });
-  expect(r.status).toBe(403); expect(select).not.toHaveBeenCalled();
+  for (const origin of ["https://evil.example", "null", undefined]) {
+    const pending = request(app).post("/oauth/consent").set("Cookie", `__Host-whoop_consent=${"c".repeat(43)}`);
+    if (origin !== undefined) pending.set("Origin", origin);
+    const r = await pending.type("form").send({ state: "s".repeat(43), csrf: "c".repeat(43), decision: "allow" });
+    expect(r.status).toBe(403); expect(select).not.toHaveBeenCalled();
+  }
 });
 
 it("fails closed with a fixed response if consent-to-WHOOP admission encounters a storage error", async () => {

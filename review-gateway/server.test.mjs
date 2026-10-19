@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { once } from "node:events";
 import { createGatewayServer, MAX_REQUEST_BYTES, PROTOCOL_VERSIONS } from "./server.mjs";
+import { createGatewayAuth, pkceChallenge, sha256 } from "./auth.mjs";
+import { GatewayStore } from "./store.mjs";
 
 const publicOrigin = "https://gateway.example";
 const bearer = `gateway_${"a".repeat(43)}`;
@@ -124,6 +126,73 @@ test("enforces canonical Host and Origin before either auth discovery or MCP pro
   assert.equal((await f.request(initialize(), { path: "/../mcp" })).status, 400);
   assert.equal((await f.request(initialize(), { path: "https://gateway.example/mcp" })).status, 400);
   assert.equal((await f.request(initialize(), { path: "/mcp?access_token=secret" })).status, 401);
+});
+
+test("real auth form responses preserve same-origin POSTs while null/missing/foreign Origin and bad CSRF stay denied", async (t) => {
+  const secret = Buffer.alloc(32, 17).toString("base64url");
+  const verifier = "v".repeat(43);
+  const callback = "http://127.0.0.1:17643/callback";
+  const resource = `${publicOrigin}/mcp`;
+  const store = new GatewayStore({ filename: ":memory:" });
+  t.after(() => store.close());
+  const auth = createGatewayAuth({ store, publicOrigin, resource, ownerSecretHash: sha256(secret),
+    clients: [{ clientId: "codex", name: "Codex", redirectUris: [callback] },
+      { clientId: "claude-code", name: "Claude Code", redirectUris: ["http://127.0.0.1:17644/callback"] }] });
+  const f = await fixture(t, { store, auth });
+  const jar = new Map();
+  const send = async (path, fields, origin = publicOrigin) => {
+    const response = await f.request(undefined, { path, method: fields ? "POST" : "GET",
+      body: fields ? new URLSearchParams(fields).toString() : "", headers: {
+        Authorization: undefined, Origin: origin ?? undefined,
+        Cookie: [...jar].map(([k, v]) => `${k}=${v}`).join("; "),
+        "Content-Type": fields ? "application/x-www-form-urlencoded" : undefined,
+      } });
+    for (const cookie of response.headers["set-cookie"] ?? []) {
+      const pair = cookie.split(";")[0]; const at = pair.indexOf("=");
+      if (/Max-Age=0(?:;|$)/i.test(cookie)) jar.delete(pair.slice(0, at));
+      else jar.set(pair.slice(0, at), pair.slice(at + 1));
+    }
+    return response;
+  };
+  const hidden = (response, name) => {
+    const value = new RegExp(`name="${name}" value="([^"]+)"`).exec(response.text)?.[1];
+    assert(value); return value;
+  };
+  const formFields = (response) => ({ flow: hidden(response, "flow"), csrf: hidden(response, "csrf") });
+  const login = await send("/oauth/authorize?" + new URLSearchParams({ client_id: "codex", redirect_uri: callback,
+    response_type: "code", code_challenge: pkceChallenge(verifier), code_challenge_method: "S256",
+    resource, state: "synthetic-state", scope: "mcp" }), undefined, null);
+  assert.equal(login.status, 200);
+  assert.equal(login.headers["referrer-policy"], "strict-origin");
+  const credentials = { ...formFields(login), secret };
+  for (const origin of ["null", "https://evil.example", null]) {
+    const rejected = await send("/login", credentials, origin);
+    assert.equal(rejected.status, origin === null ? 400 : 403);
+    assert.equal(rejected.headers["referrer-policy"], "no-referrer");
+  }
+  assert.equal((await send("/login", { ...credentials, csrf: Buffer.alloc(32, 8).toString("base64url") })).status, 403);
+  const consent = await send("/login", credentials);
+  assert.equal(consent.status, 200);
+  assert.equal(consent.headers["referrer-policy"], "strict-origin");
+  const choice = { ...formFields(consent), decision: "allow" };
+  for (const origin of ["null", "https://evil.example", null]) {
+    assert.equal((await send("/consent", choice, origin)).status, origin === null ? 400 : 403);
+  }
+  const redirect = await send("/consent", choice);
+  assert.equal(redirect.status, 302);
+  assert.equal(redirect.headers["referrer-policy"], "no-referrer");
+  const url = new URL(redirect.headers.location);
+  assert.equal(url.origin + url.pathname, callback);
+  const token = await send("/oauth/token", { grant_type: "authorization_code", client_id: "codex",
+    redirect_uri: callback, resource, code: url.searchParams.get("code"), code_verifier: verifier });
+  assert.equal(token.status, 200);
+  assert.equal(token.headers["referrer-policy"], "no-referrer");
+  assert.equal(token.json.expires_in, 604800);
+  const owner = await send("/owner");
+  assert.equal(owner.status, 200);
+  assert.equal(owner.headers["referrer-policy"], "strict-origin");
+  assert.match(owner.text, /1 active authorization/);
+  assert.equal(f.calls.length, 0);
 });
 
 test("rejects ambiguous bearer and Origin headers", async (t) => {

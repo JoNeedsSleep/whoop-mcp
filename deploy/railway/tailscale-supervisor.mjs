@@ -8,6 +8,10 @@ import { fail, object, privateDirectory, readPrivateJson, tailnetHostname, TS_VE
 export const TS_BIN = '/usr/local/bin/tailscale';
 export const DAEMON_BIN = '/usr/local/bin/tailscaled';
 export const childEnvironment = Object.freeze({ PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp', TS_NO_LOGS_NO_SUPPORT: 'true' });
+// Pinned Tailscale Serve uses Go's ordinary http.Server without a custom HTTP/2
+// handler. Disable its HTTP/2 server paths while retaining HTTPS and HTTP/1.1.
+// This is a literal daemon-only setting, never inherited from the operator.
+export const daemonEnvironment = Object.freeze({ ...childEnvironment, GODEBUG: 'http2server=0' });
 export function expectedServe(hostname, port) {
   if (hostname === undefined && port === undefined) return {};
   tailnetHostname(hostname);
@@ -134,14 +138,19 @@ export async function startTailscale({ stateDirectory, tag, hostname, port, enro
     if (version.trim().split('\n')[0] !== TS_VERSION) fail();
     daemon = spawnFn(DAEMON_BIN, ['--tun=userspace-networking', `--state=${stateFile}`, `--statedir=${stateDirectory}`,
       `--socket=${socket}`, '--socks5-server=127.0.0.1:1055', '--no-logs-no-support'],
-    { env: childEnvironment, stdio: 'ignore' });
+    { env: daemonEnvironment, stdio: 'ignore' });
     daemon.on('error', () => { if (daemon.pid === undefined) daemonEnded = true; resolveFailure(); });
     daemon.once('exit', () => { daemonEnded = true; if (!closed) resolveFailure(); });
     daemon.once('close', () => { daemonEnded = true; if (!closed) resolveFailure(); });
     let status;
     for (let i = 0; i < startupAttempts; i++) {
       try { status = JSON.parse(await cli(['status', '--json'])); } catch { status = undefined; }
-      if (status?.BackendState === 'Running' || (enrollmentKey !== undefined && status?.BackendState === 'NeedsLogin')) break;
+      // Running and control-plane connectivity are separate Tailscale status
+      // signals. A saved node can briefly be Running while Self.Online is false.
+      // Wait for both before applying the unchanged exact identity checks.
+      if (enrollmentKey !== undefined) {
+        if (status?.BackendState === 'NeedsLogin' || status?.BackendState === 'Running') break;
+      } else if (status?.BackendState === 'Running' && status.Self?.Online === true) break;
       if (daemonEnded || daemon.exitCode !== null || daemon.signalCode) fail();
       await wait(500);
     }

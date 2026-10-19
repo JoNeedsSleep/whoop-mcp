@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { it, expect, vi } from "vitest";
 import express from "express";
 import request from "supertest";
+import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from "undici";
 import { schema } from "../src/db/client.js";
 import { WhoopOAuthProvider, pkceChallenge } from "../src/auth/oauth-provider.js";
 import { createWhoopCallbackRouter } from "../src/auth/whoop-callback.js";
@@ -97,4 +98,48 @@ it("also gives internal dashboard login a flow-specific secure browser binding",
   expect(cookies).toContain("Secure");
   expect(cookies).toContain("HttpOnly");
   expect(cookies).not.toContain("Domain=");
+});
+
+it("uses the pinned HTTP client for both callback token exchange and profile lookup without a fetch override", async () => {
+  const previous = getGlobalDispatcher();
+  const agent = new MockAgent(); agent.disableNetConnect(); setGlobalDispatcher(agent);
+  const bundledFetch = vi.fn(() => { throw new Error("Bundled fetch must not run"); });
+  vi.stubGlobal("fetch", bundledFetch);
+  try {
+    const state = "s".repeat(43); const browser = "b".repeat(43);
+    let pending: any = { whoopState: state, expiresAt: new Date(Date.now() + 60_000), payload: {
+      stage: "whoop", clientId: "whoop-mcp-dashboard", clientRedirectUri: `${origin}/dashboard/connected`,
+      clientState: "bound-dashboard-state", clientCodeChallenge: pkceChallenge("v".repeat(43)),
+      whoopCodeVerifier: "w".repeat(43), scopes: ["mcp"],
+      browserBindingHash: createHash("sha256").update(browser).digest("hex"),
+    } };
+    const codes: any[] = [];
+    const db: any = {
+      select: () => ({ from: () => ({ where: async () => pending ? [pending] : [] }) }),
+      delete: () => ({ where: () => ({ returning: async () => {
+        const row = pending; pending = undefined; return row ? [row] : [];
+      } }) }),
+      insert: () => ({ values: async (row: any) => { codes.push(row); } }),
+    };
+    const tokenStore = { upsertUserAndTokens: vi.fn(async () => "owner-user") } as any;
+    const upstream = agent.get("https://api.prod.whoop.com");
+    upstream.intercept({ path: "/oauth/oauth2/token", method: "POST", body: new URLSearchParams({
+      grant_type: "authorization_code", code: "fixture-code", redirect_uri: `${origin}/whoop/callback`,
+      client_id: "fixture-id", client_secret: "fixture-secret", code_verifier: "w".repeat(43),
+    }).toString() }).reply(200, { access_token: "fixture-access", refresh_token: "fixture-refresh", expires_in: 3600, scope: "read:profile offline" });
+    upstream.intercept({ path: "/developer/v2/user/profile/basic", method: "GET",
+      headers: { authorization: "Bearer fixture-access" } }).reply(200, { user_id: 42, email: "discard@example.test" });
+    const app = express();
+    app.use(createWhoopCallbackRouter({ db, tokenStore, publicBaseUrl: origin, allowedWhoopUserId: "42",
+      approvedClientRedirectUris: [], credentials: { getClientCredentials: async () => ({ clientId: "fixture-id", clientSecret: "fixture-secret" }) } }));
+    const response = await request(app).get(`/whoop/callback?state=${state}&code=fixture-code`)
+      .set("Cookie", `${flowCookieName(state)}=${browser}`);
+    expect(response.status).toBe(302);
+    expect(new URL(response.headers.location).pathname).toBe("/dashboard/connected");
+    expect(tokenStore.upsertUserAndTokens).toHaveBeenCalledWith("42", null, expect.objectContaining({ accessToken: "fixture-access" }));
+    expect(codes).toHaveLength(1); expect(codes[0].userId).toBe("owner-user");
+    expect(bundledFetch).not.toHaveBeenCalled(); agent.assertNoPendingInterceptors();
+  } finally {
+    setGlobalDispatcher(previous); vi.unstubAllGlobals(); await agent.close();
+  }
 });

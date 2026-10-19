@@ -49,7 +49,10 @@ function fakeDocker({ mutateInspect, mutateVolume, mutateImage, intercept } = {}
       }
       const row = {
         Id: id, Name: name, Image: args[imageIndex], Config: { User: value(args, "--user"), Env: [...BASE_ENV],
-          Entrypoint: [value(args, "--entrypoint")], Cmd: args.slice(imageIndex + 1) },
+          Entrypoint: [value(args, "--entrypoint")], Cmd: args.slice(imageIndex + 1),
+          Labels: Object.fromEntries(values(args, "--label").map(label => {
+            const split = label.indexOf("="); return [label.slice(0, split), label.slice(split + 1)];
+          })) },
         HostConfig: { Privileged: args.includes("--privileged"), ReadonlyRootfs: args.includes("--read-only"),
           CapDrop: values(args, "--cap-drop"), CapAdd: values(args, "--cap-add").map((cap) => `CAP_${cap}`), SecurityOpt: values(args, "--security-opt"),
           NetworkMode: value(args, "--network"), IpcMode: value(args, "--ipc"), CgroupnsMode: value(args, "--cgroupns"),
@@ -91,6 +94,8 @@ function assertNoHostAccess(fake) {
     assert.ok(values(args, "--mount").every((mount) => !mount.includes("docker.sock") && !mount.includes(".ssh")));
     assert.equal(value(args, "--ipc"), "none"); assert.equal(value(args, "--cgroupns"), "private");
     assert.deepEqual(values(args, "--cap-drop"), ["ALL"]);
+    assert.deepEqual(values(args, "--label").filter(label => label.startsWith("dev.orbstack.add-ca-certificates=")),
+      ["dev.orbstack.add-ca-certificates=false"]);
   }
   assert.equal(commandCalls(fake, "pull").length, 0);
   assert.equal(fake.calls.filter(({ args }) => args[0] === "volume" && args[1] === "rm").length, 0);
@@ -138,6 +143,9 @@ test("initialization provisions only empty private named volumes while offline",
   assert.deepEqual(provision, { clientId: "claude-code", origin: config.origin, tokenFile: "/auth/token.json",
     stateFile: "/auth/state.sqlite", cacheFile: "/cache/cache.json" });
   assert.equal(commandCalls(fake, "exec").length, 0); assertNoHostAccess(fake); assertDisposed(fake);
+  const volumes = fake.calls.filter(({ args }) => args[0] === "volume" && args[1] === "create");
+  assert.equal(volumes.length, 2);
+  for (const { args } of volumes) assert.ok(values(args, "--label").every(label => !label.startsWith("dev.orbstack.")));
 });
 
 test("sync loads application code only after verified firewall success and helper removal", async () => {
@@ -208,6 +216,9 @@ test("container inspection rejects credential mounts, extra authority and isolat
   const mutations = [
     (r) => { r.Config.User = "0:0"; }, (r) => { r.Config.Env.push("SSH_AUTH_SOCK=/ssh-agent"); },
     (r) => { r.Config.Entrypoint = ["/bin/sh"]; }, (r) => { r.Config.Cmd = ["attacker.mjs"]; },
+    (r) => { delete r.Config.Labels["dev.orbstack.add-ca-certificates"]; },
+    (r) => { r.Config.Labels["dev.orbstack.add-ca-certificates"] = "true"; },
+    (r) => { r.Config.Labels["dev.orbstack.add-ca-certificates"] = false; },
     (r) => { r.HostConfig.Privileged = true; }, (r) => { r.HostConfig.ReadonlyRootfs = false; },
     (r) => { r.HostConfig.CapAdd = ["NET_ADMIN"]; }, (r) => { r.HostConfig.CapDrop = []; },
     (r) => { r.HostConfig.SecurityOpt = []; }, (r) => { r.HostConfig.NetworkMode = "host"; },
@@ -237,6 +248,7 @@ test("firewall failure, unverifiable exit and namespace drift prevent applicatio
     { mutateInspect: (row, count) => { if (row.Image === FIREWALL_IMAGE && count === 2) row.State.ExitCode = 1; } },
     { mutateInspect: (row, count) => { if (row.Image === config.syncImage && count === 2) row.HostConfig.ExtraHosts = ["health.example.test:127.0.0.1"]; } },
     { mutateInspect: (row, count) => { if (row.Image === config.syncImage && count === 2) row.HostConfig.Dns = ["1.1.1.1"]; } },
+    { mutateInspect: (row, count) => { if (row.Image === config.syncImage && count === 2) delete row.Config.Labels["dev.orbstack.add-ca-certificates"]; } },
     { mutateInspect: (row) => { if (row.Image === FIREWALL_IMAGE) row.HostConfig.NetworkMode = "host"; } },
   ];
   for (const failure of failures) {

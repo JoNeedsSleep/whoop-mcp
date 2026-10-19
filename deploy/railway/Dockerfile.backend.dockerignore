@@ -6,6 +6,9 @@
 !deploy/railway/config.mjs
 !deploy/railway/tailscale-supervisor.mjs
 !deploy/railway/runtime.mjs
+!deploy/railway/backend-runtime.mjs
+!deploy/staging/
+!deploy/staging/runtime-check.mjs
 !backend-artifact/
 !backend-artifact/package.json
 !backend-artifact/node_modules/**

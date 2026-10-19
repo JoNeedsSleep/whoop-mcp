@@ -114,7 +114,8 @@ export class WhoopOAuthProvider implements OAuthServerProvider {
       res.status(503).send(AUTHORIZATION_BUSY_MESSAGE); return;
     }
     res.cookie(CONSENT_COOKIE, csrf, { ...cookieOptions, maxAge: PENDING_TTL_MS });
-    res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+    // Browser form POSTs need their origin; omit paths/query strings and HTTPS downgrades.
+    res.set({ "Cache-Control": "no-store", "Referrer-Policy": "strict-origin",
       "Content-Security-Policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" });
     res.type("html").send(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Approve WHOOP access</title>
       <h1>Allow this client to read WHOOP health data?</h1>

@@ -40,7 +40,11 @@ function headers(res, formCallback) {
 }
 function json(res, status, value) { headers(res); res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(value)); }
 function html(res, title, body, status = 200, formCallback) {
-  headers(res, formCallback); res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+  headers(res, formCallback);
+  // no-referrer makes browser navigation POSTs send Origin: null. Preserve the
+  // origin for our same-origin forms, never paths/query strings or HTTPS downgrades.
+  res.setHeader("Referrer-Policy", "strict-origin");
+  res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
   res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><title>${escape(title)}</title><h1>${escape(title)}</h1>${body}</html>`);
 }
 function params(input, allowed) {

@@ -18,6 +18,9 @@ const clients = new Set(["codex", "claude-code"]);
 const clientPort = (clientId) => clientId === "codex" ? 17643 : 17644;
 const metadata = { rr_project_id: "whoop", rr_owner_id: "individual", rr_kill_date: REVIEW_DATE, rr_purpose: "restricted-local" };
 const labels = Object.entries(metadata).flatMap(([key, value]) => ["--label", `${key}=${value}`]);
+// OrbStack otherwise injects its public CA at start, including into read-only
+// containers. Keep this container setting separate from persistent volume labels.
+const CA_INJECTION_LABEL = "dev.orbstack.add-ca-certificates";
 export function volumeNames(clientId) {
   if (!clients.has(clientId)) unavailable();
   const prefix = `whoop_individual_sub-restricted-${clientId}`;
@@ -177,7 +180,7 @@ export function createLauncher(raw, { docker }) {
         !same(h.PortBindings ?? {}, expectedPorts) || !same(sorted(Object.keys(h.Tmpfs ?? {})), sorted(spec.tmpfs)) ||
         Object.values(h.Tmpfs ?? {}).some((value) => value !== "rw,noexec,nosuid,nodev,size=16m,mode=1777") ||
         !same(sorted(c.Env), sorted(baseline.Config.Env)) || !same(c.Entrypoint, [spec.entrypoint]) ||
-        !same(c.Cmd, spec.args)) unavailable();
+        !same(c.Cmd, spec.args) || c.Labels?.[CA_INJECTION_LABEL] !== "false") unavailable();
     const volumeMounts = mounts.filter((mount) => mount.Type === "volume");
     if (volumeMounts.length !== spec.volumes.length || volumeMounts.some((mount) => !spec.volumes.some((expected) =>
       mount.Name === expected.name && mount.Destination === expected.target && mount.RW === !expected.readonly)) ||
@@ -188,7 +191,7 @@ export function createLauncher(raw, { docker }) {
     spec = { ...spec, entrypoint, args };
     const baseline = await image(spec.image);
     const name = spec.name ?? `whoop_individual_sub-restricted_run-${randomBytes(8).toString("hex")}_kill-${REVIEW_DATE}`;
-    const argv = ["create", "--pull=never", "--name", name, ...labels, "--read-only", "--user", spec.user,
+    const argv = ["create", "--pull=never", "--name", name, ...labels, "--label", `${CA_INJECTION_LABEL}=false`, "--read-only", "--user", spec.user,
       "--network", spec.network, "--ipc", "none", "--cgroupns", "private", "--cap-drop", "ALL",
       ...spec.caps.flatMap((cap) => ["--cap-add", cap]), "--security-opt", "no-new-privileges:true",
       "--pids-limit", "64", "--memory", "128m", "--memory-swap", "128m", "--cpus", "0.5",

@@ -1,7 +1,7 @@
 # WHOOP security review branch
 
 Review draft based on upstream `148f12076885cfe3f5f35b21a315ff71832c11e2`.
-This is not an approved deployment. The server/web build and test suites now pass in a verified disposable Node 22 environment. The branch schema and database concurrency tests ran only in a separately approved, empty synthetic PostgreSQL fixture. Keep this PR draft and unmerged.
+This remains a draft security review, not production approval. The user authorized private synthetic Railway staging, dependency review, and Tailscale/client callback tests using their personal account, then requested real WHOOP integration. Real-data preparation is now authorized, but activation remains pending the documented runtime gates, account authorization and live verification; the current deployment still contains synthetic data only. DNS changes and merging remain out of scope. The remediated dependency lock passed 318 tests and both server/web builds in a fresh verified disposable Node 22 environment. The branch schema and database concurrency tests ran only in a separately approved, empty synthetic PostgreSQL fixture. See [dependency remediation](DEPENDENCY_REVIEW.md), [runtime findings](IMAGE_SECURITY_REVIEW.md), and [live staging validation](deploy/staging/VALIDATION.md) for the current results and unresolved limits; older validation sections below retain their original scope. Keep this PR draft and unmerged.
 
 ## Intended boundary
 

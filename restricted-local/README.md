@@ -81,6 +81,15 @@ SSH agent, browser profile, authorization volume or Docker socket into the reade
 The host-side launcher necessarily has authority to invoke Docker; this is an
 operator installation tool and is not exposed as an MCP tool.
 
+OrbStack can inject its public root CA when a container starts, even with a
+read-only root and no listed host mounts. This changes the container's trust
+store; it does not supply the CA's private key. Every launcher-created container
+sets and verifies `dev.orbstack.add-ca-certificates=false`, using OrbStack's
+[documented per-container opt-out](https://docs.orbstack.dev/features/https#between-containers).
+This leaves global OrbStack settings and existing containers untouched. Image
+digests, read-only mounts and Docker inspection alone do not attest to daemon
+behavior; check the running certificate bundle when validating a TLS image.
+
 Sync and login get per-client authorization and cache volumes, never host bind
 mounts. The launcher supports two explicit configurations:
 

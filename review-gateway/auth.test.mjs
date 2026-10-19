@@ -82,6 +82,7 @@ test("metadata advertises only exact preregistered public-client OAuth with issu
   const f = fixture(t);
   const metadata = await request(f, "/.well-known/oauth-authorization-server");
   assert.equal(metadata.status, 200);
+  assert.equal(metadata.getHeader("referrer-policy"), "no-referrer");
   assert.equal(metadata.json().issuer, ORIGIN);
   assert.equal(metadata.json().authorization_response_iss_parameter_supported, true);
   assert.equal(metadata.json().registration_endpoint, undefined);
@@ -126,11 +127,15 @@ test("only consent permits its active callback origin in form-action; login and 
   const defaultPolicy = "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
   const policyFor = (origin) => `default-src 'none'; form-action 'self' ${origin}; frame-ancestors 'none'; base-uri 'none'`;
   const login = await request(f, authorization());
+  assert.equal(login.getHeader("referrer-policy"), "strict-origin");
   assert.equal(login.getHeader("content-security-policy"), defaultPolicy);
   const consent = await post(f, "/login", { ...fields(login), secret: SECRET });
+  assert.equal(consent.getHeader("referrer-policy"), "strict-origin");
   assert.equal(consent.getHeader("content-security-policy"), policyFor("http://127.0.0.1:17643"));
   assert.equal((await request(f, authorization(CLIENTS[1]))).getHeader("content-security-policy"), policyFor("http://localhost:17644"));
-  assert.equal((await request(f, "/owner")).getHeader("content-security-policy"), defaultPolicy);
+  const owner = await request(f, "/owner");
+  assert.equal(owner.getHeader("content-security-policy"), defaultPolicy);
+  assert.equal(owner.getHeader("referrer-policy"), "strict-origin");
   // Delimiters in an explicitly configured path never become CSP directives.
   const callback = "https://approved.example/callback;script-src%20%27unsafe-inline%27";
   assert(validateCallback(callback));
@@ -148,6 +153,11 @@ test("owner login requires exact Origin, dedicated secret and same-browser CSRF;
   const initial = await request(f, authorization()); const login = fields(initial);
   assert.equal((await post(f, "/consent", { ...login, decision: "allow" })).status, 400);
   assert.equal((await post(f, "/login", { ...login, secret: SECRET }, { headers: { origin: "https://evil.example" } })).status, 400);
+  for (const headers of [{ origin: "null" }, {}]) {
+    const rejected = await request(f, "/login", { method: "POST", fields: { ...login, secret: SECRET }, headers });
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.getHeader("referrer-policy"), "no-referrer");
+  }
   assert.equal((await post(f, "/login", { ...login, secret: SECRET }, { jar: new Map() })).status, 403);
   assert.equal((await post(f, "/login", { ...login, csrf: Buffer.alloc(32, 8).toString("base64url"), secret: SECRET })).status, 403);
   assert.equal((await post(f, "/login", { ...login, secret: "whoop-or-model-credential" })).status, 403);
@@ -161,6 +171,7 @@ test("owner login requires exact Origin, dedicated secret and same-browser CSRF;
   assert.equal((await post(f, "/login", { ...login, secret: SECRET })).status, 403);
   assert.equal(f.jar.get("__Host-gw_owner"), ownerCookie);
   const response = await post(f, "/consent", { ...fields(logged), decision: "allow" });
+  assert.equal(response.getHeader("referrer-policy"), "no-referrer");
   const callback = new URL(response.getHeader("location"));
   assert.equal(callback.origin + callback.pathname, CLIENTS[0].redirectUris[0]);
   assert.equal(callback.searchParams.get("state"), "synthetic-state"); assert.equal(callback.searchParams.get("iss"), ORIGIN);
@@ -180,6 +191,7 @@ test("code redemption is mandatory S256/resource/client/callback bound and one-u
     const response = await exchange(f, code, CLIENTS[0], overrides); assert.equal(response.status, 400); assert.equal(response.json().error, "invalid_grant");
   }
   const response = await exchange(f, code); assert.equal(response.status, 200);
+  assert.equal(response.getHeader("referrer-policy"), "no-referrer");
   assert.equal(response.json().expires_in, 604800); assert.equal(response.json().refresh_token, undefined);
   assert.equal((await exchange(f, code)).status, 400);
   assert.equal((await exchange(f, code, CLIENTS[0], { grant_type: "refresh_token" })).json().error, "unsupported_grant_type");

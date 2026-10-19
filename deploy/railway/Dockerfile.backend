@@ -5,7 +5,10 @@ FROM tailscale/tailscale@sha256:99691662a2e82fbfd2bf55db0fd52bacd2f4664ce6fd1dec
 FROM node@sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562
 WORKDIR /app/backend
 COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
+COPY --from=tailscale /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY deploy/railway/config.mjs deploy/railway/tailscale-supervisor.mjs deploy/railway/runtime.mjs /app/deploy/railway/
+COPY deploy/railway/backend-runtime.mjs /app/deploy/railway/
+COPY deploy/staging/runtime-check.mjs /app/deploy/staging/
 COPY backend-artifact/package.json ./
 COPY backend-artifact/node_modules ./node_modules
 COPY backend-artifact/dist ./dist
@@ -13,5 +16,5 @@ COPY backend-artifact/web/dist ./web/dist
 COPY backend-artifact/drizzle ./drizzle
 USER node
 ENV NODE_ENV=production
-ENTRYPOINT ["/usr/local/bin/node", "/app/deploy/railway/runtime.mjs"]
+ENTRYPOINT ["/usr/bin/setpriv", "--no-new-privs", "--", "/usr/local/bin/node", "/app/deploy/railway/backend-runtime.mjs"]
 CMD ["/data/config/runtime.json"]
