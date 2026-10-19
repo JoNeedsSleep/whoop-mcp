@@ -290,3 +290,25 @@ and the staging guard rejected the unwrapped process while accepting the wrapped
 process. UID/GID, capabilities and seccomp stayed unchanged. The packaged CLI
 guards enforce this condition; internal library exports and arbitrary replacement
 commands are not a provider-wide execution policy.
+
+
+## Synthetic staging transport workaround
+
+The verified synthetic gateway wrapper enables a trusted, strictly boolean
+`syntheticStagingRelayOnly` runtime option. Only the gateway tag can use it; it
+adds the literal `TS_DEBUG_ALWAYS_USE_DERP=true` to that daemon's fixed environment.
+It is not accepted from runtime JSON, environment variables, HTTP input or CLI
+arguments. Real backend/gateway wrappers and local transports retain the default
+transport behavior.
+
+The [pinned Tailscale 1.104.1 source](https://github.com/tailscale/tailscale/blob/v1.104.1/wgengine/magicsock/magicsock.go#L3525)
+implements this experimental debug setting by disabling its UDP transports. In the staging comparison, native verified TLS
+failed after the connection changed from DERP to direct; all seven handshakes
+completed when confined to DERP. This identifies a usable staging workaround,
+not the underlying packet-loss cause or a stable production API. WireGuard
+end-to-end encryption, certificate/hostname verification, ACLs, TLS settings,
+MTU and request deadlines remain unchanged. DERP introduces relay dependency
+and possible latency/throughput costs; ongoing reliability is not established.
+The final normal staging image contains no temporary native probe, stage logs
+or byte-count diagnostics. Real-data activation requires a separate transport
+review; this option does not authorize it.

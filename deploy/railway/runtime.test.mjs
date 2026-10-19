@@ -95,7 +95,7 @@ test('userspace daemon gets fixed commands, stripped env, private admin socket a
   await runtime.close(); assert.equal(fake.child.signalCode, 'SIGTERM');
 });
 test('daemon HTTP2 mitigation is fixed despite inherited overrides and never changes CLI environment', async t => {
-  const inherited = { GODEBUG: 'http2server=1,http2debug=2,x509usefallbackroots=1',
+  const inherited = { TS_DEBUG_ALWAYS_USE_DERP: 'true', TS_DEBUG_USE_DERP_HTTP: 'true', TS_DEBUG_MTU: '1', GODEBUG: 'http2server=1,http2debug=2,x509usefallbackroots=1',
     SSLKEYLOGFILE: '/tmp/synthetic-secret-log', TS_AUTHKEY: 'synthetic-secret-sentinel' };
   const previous = Object.fromEntries(Object.keys(inherited).map(key => [key, process.env[key]]));
   Object.assign(process.env, inherited);
@@ -110,7 +110,7 @@ test('daemon HTTP2 mitigation is fixed despite inherited overrides and never cha
     try {
       const daemon = fake.calls.find(call => call.binary.endsWith('tailscaled'));
       assert.deepEqual(daemon.options.env, daemonEnvironment);
-      for (const key of ['SSLKEYLOGFILE', 'TS_AUTHKEY', 'SSH_AUTH_SOCK', 'HTTP_PROXY', 'HTTPS_PROXY']) assert.equal(daemon.options.env[key], undefined);
+      for (const key of ['TS_DEBUG_ALWAYS_USE_DERP', 'TS_DEBUG_USE_DERP_HTTP', 'TS_DEBUG_MTU', 'SSLKEYLOGFILE', 'TS_AUTHKEY', 'SSH_AUTH_SOCK', 'HTTP_PROXY', 'HTTPS_PROXY']) assert.equal(daemon.options.env[key], undefined);
       assert.ok(fake.calls.some(call => call.args.includes('--https=443')));
     } finally { await runtime.close(); }
     let cliOptions;
@@ -120,6 +120,7 @@ test('daemon HTTP2 mitigation is fixed despite inherited overrides and never cha
       return child;
     } });
     assert.equal(result, '1.104.1\n'); assert.deepEqual(cliOptions.env, childEnvironment);
+    assert.equal(cliOptions.env.TS_DEBUG_ALWAYS_USE_DERP, undefined);
     assert.equal(cliOptions.env.GODEBUG, undefined); assert.equal(cliOptions.env.TS_AUTHKEY, undefined);
   } finally {
     for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
@@ -255,4 +256,53 @@ test('enrollment never starts local relay or remote app; runtime closes peers on
   assert.throws(() => validateAppConfig(remote, { ...gatewayConfig, upstreamOrigin: 'http://backend.test-tailnet.ts.net' }));
   await assert.rejects(startDeployment(remote, { tailscale, gateway: forbidden, readAppConfig: () => gatewayConfig }), /PRIVATE_RUNTIME_UNAVAILABLE/);
   assert.equal(closed, 3);
+});
+
+
+test('synthetic relay option is a strict gateway-only boolean and never changes default backend or local mode', async t => {
+  for (const value of [null, 'true', 'false', 0, 1, {}, []]) {
+    const { directory } = fixture(t, false); const fake = fakeNode();
+    await assert.rejects(startTailscale({ stateDirectory: directory, tag: 'tag:whoop-gateway', hostname: remote.hostname,
+      port: 8787, syntheticStagingRelayOnly: value }, fake), /PRIVATE_RUNTIME_UNAVAILABLE/);
+    assert.equal(fake.calls.length, 0); assert.equal(fs.existsSync(path.join(directory, 'runtime.lock')), false);
+  }
+  for (const tag of ['tag:whoop-backend', 'tag:whoop-local-codex', 'tag:whoop-local-claude-code']) {
+    const { directory } = fixture(t); const fake = fakeNode();
+    await assert.rejects(startTailscale({ stateDirectory: directory, tag, syntheticStagingRelayOnly: true }, fake), /PRIVATE_RUNTIME_UNAVAILABLE/);
+    assert.equal(fake.calls.length, 0); assert.equal(fs.existsSync(path.join(directory, 'runtime.lock')), false);
+  }
+  const backendState = fixture(t, false); const backendNode = fakeNode({ tag: 'tag:whoop-backend', hostname: 'backend.test-tailnet.ts.net' });
+  const backendRuntime = await startTailscale({ stateDirectory: backendState.directory, tag: 'tag:whoop-backend',
+    hostname: 'backend.test-tailnet.ts.net', port: 8080 }, backendNode);
+  try { assert.deepEqual(backendNode.calls.find(call => call.binary.endsWith('tailscaled')).options.env, daemonEnvironment); }
+  finally { await backendRuntime.close(); }
+  const { directory } = fixture(t, false); const fake = fakeNode({ tag: 'tag:whoop-gateway', hostname: remote.hostname });
+  const runtime = await startTailscale({ stateDirectory: directory, tag: 'tag:whoop-gateway', hostname: remote.hostname,
+    port: 8787, syntheticStagingRelayOnly: true }, fake);
+  try {
+    const daemon = fake.calls.find(call => call.binary.endsWith('tailscaled'));
+    assert.deepEqual(daemon.options.env, { ...daemonEnvironment, TS_DEBUG_ALWAYS_USE_DERP: 'true' });
+    assert.ok(Object.isFrozen(daemon.options.env));
+    assert.equal(daemonEnvironment.TS_DEBUG_ALWAYS_USE_DERP, undefined);
+    assert.equal(childEnvironment.TS_DEBUG_ALWAYS_USE_DERP, undefined);
+    assert.ok(fake.calls.some(call => call.args.includes('--https=443')));
+  } finally { await runtime.close(); }
+});
+
+test('deployment forwards synthetic relay option only when explicitly true and rejects it before app reads for other roles', async () => {
+  const forbidden = () => assert.fail('Invalid option must fail before private input, daemon or app');
+  for (const value of [null, 'true', 'false', 0, 1, {}, []]) {
+    await assert.rejects(startDeployment(remote, { syntheticStagingRelayOnly: value, readAppConfig: forbidden, tailscale: forbidden }), /PRIVATE_RUNTIME_UNAVAILABLE/);
+  }
+  const backend = { role: 'backend', hostname: 'backend.test-tailnet.ts.net', stateDirectory: '/data/tailscale', appConfigFile: '/data/config/app.json' };
+  await assert.rejects(startDeployment(backend, { syntheticStagingRelayOnly: true, readAppConfig: forbidden, tailscale: forbidden }), /PRIVATE_RUNTIME_UNAVAILABLE/);
+  const calls = [];
+  const tailscale = async options => { calls.push(options); return { close: async () => {}, failed: new Promise(() => {}) }; };
+  for (const option of [{}, { syntheticStagingRelayOnly: false }, { syntheticStagingRelayOnly: true }]) {
+    await startDeployment(remote, { ...option, enrollmentKey: 'synthetic', tailscale, readAppConfig: forbidden, gateway: forbidden });
+  }
+  assert.ok(!Object.hasOwn(calls[0], 'syntheticStagingRelayOnly'));
+  assert.ok(!Object.hasOwn(calls[1], 'syntheticStagingRelayOnly'));
+  assert.equal(calls[2].syntheticStagingRelayOnly, true);
+  assert.throws(() => parseDeploymentConfig({ ...remote, syntheticStagingRelayOnly: true }));
 });

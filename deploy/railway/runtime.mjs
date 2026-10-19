@@ -54,13 +54,15 @@ export function validateAppConfig(config, raw) {
   if (raw.upstreamOrigin !== `https://${upstream.hostname}` || upstream.hostname === config.hostname) fail();
   return raw;
 }
-export async function startDeployment(raw, { enrollmentKey, tailscale = startTailscale,
+export async function startDeployment(raw, { enrollmentKey, syntheticStagingRelayOnly = false, tailscale = startTailscale,
   readAppConfig = readPrivateJson, backend = startBackend, gateway = startPrivateGateway } = {}) {
   process.umask(0o077);
   const config = parseDeploymentConfig(raw);
+  if (typeof syntheticStagingRelayOnly !== 'boolean' || (syntheticStagingRelayOnly && config.role !== 'gateway')) fail();
   const appConfig = enrollmentKey === undefined ? validateAppConfig(config, readAppConfig(config.appConfigFile)) : undefined;
   const node = await tailscale({ stateDirectory: config.stateDirectory, tag: `tag:whoop-${config.role}`, hostname: config.hostname,
-    port: config.role === 'gateway' ? 8787 : 8080, enrollmentKey });
+    port: config.role === 'gateway' ? 8787 : 8080, enrollmentKey,
+    ...(syntheticStagingRelayOnly ? { syntheticStagingRelayOnly: true } : {}) });
   let app; let closing;
   const close = () => closing ??= (async () => { try { await app?.close(); } finally { await node.close(); } })();
   try {

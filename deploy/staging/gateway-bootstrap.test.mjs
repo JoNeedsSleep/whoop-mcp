@@ -98,10 +98,11 @@ test('gateway wrapper refuses root, wrong GID, symlinked configs and multiply-li
   fs.unlinkSync(copy); assert.deepEqual(readStagingGateway({ root }).marker, MARKER);
 });
 
-test('valid wrapper delegates unchanged production gateway with verified app config and separate enrollment', async t => {
+test('verified synthetic wrapper alone enables gateway relay mode with separate enrollment', async t => {
   const root = temporary(t); const expected = gatewayConfiguration(MARKER); const calls = [];
   const deploy = async (runtime, options) => {
     calls.push(options.enrollmentKey); assert.deepEqual(runtime, expected.runtime);
+    assert.equal(options.syntheticStagingRelayOnly, true);
     assert.deepEqual(options.readAppConfig('/data/config/app.json'), expected.app);
     assert.throws(() => options.readAppConfig('/data/config/other.json'));
     return { close: async () => {}, failed: new Promise(() => {}) };

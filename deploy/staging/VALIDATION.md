@@ -68,10 +68,41 @@ independently reviewed gateway diagnostic then confirmed the fixed SOCKS target,
 normal certificate/hostname validation, HTTP 200 and a valid single synthetic
 summary. The normal snapshot still returned 503 on the subsequent probe, so the
 successful single request does not establish a working seven-day snapshot path.
-The temporary diagnostic was removed by a fresh normal deployment, whose startup
-was verified. These probes did not modify client caches or local hourly admission
-state and are not counted as successful syncs. The complete data path remains
-under investigation; no end-to-end usable connection is claimed.
+That diagnostic was removed by a fresh normal deployment, whose startup was
+verified. Later, capped fixed-stage diagnostics on the persistent path showed
+two valid summaries followed by a five-second TLS handshake timeout. The third
+request's SOCKS tunnel was established in three milliseconds; previous relay
+peers closed normally, and no admission rejection occurred. This narrows the
+failure to the encrypted connection after tunnel establishment; it does not yet
+prove a vendor, network or adapter defect. These probes did not modify client
+caches or local hourly admission state and are not counted as successful syncs.
+An independent native TLS probe then reproduced the failure without the gateway
+HTTP parser or either relay adapter: the first two verified TLS handshakes
+succeeded, then five timed out as the peer path changed from DERP to direct.
+With the pinned vendor's experimental relay-only switch, all seven handshakes
+succeeded over DERP. This supports a direct-path-dependent failure, not a proven
+MTU diagnosis or a general Tailscale defect.
+
+The verified synthetic staging wrapper now enables that gateway-only workaround.
+The production backend/gateway wrappers and local transports retain their normal
+defaults. A fresh normal deployment restored the guarded entrypoint and removed
+all temporary probes, stage logging and byte-count diagnostics. Its reviewed
+20-file source artifact passed 44 focused regression tests; Railway reported a
+successful deployment and normal synthetic startup. See the
+[workaround's scope and limits](README.md#synthetic-staging-transport-workaround).
+
+A full live Codex proof used the normal sync implementation, default clock/TLS,
+and existing seven-day grant to fetch all seven expected synthetic rows. A second
+sync was correctly limited. A separate offline reader, with only the scratch
+cache mounted read-only, passed MCP initialization, the immutable tool list and
+the expected numeric response. Fresh disposable state/cache volumes were removed
+afterward; the original client's cache and admission state were not changed.
+This successful proof used the relay experiment immediately before the clean
+deployment. A subsequent Claude proof against the clean deployment was
+unavailable; a bounded status-only probe confirmed the preserved shared rolling
+hour quota returned HTTP 429. Its scratch resources were also removed. The quota
+has not been reset or relaxed to make the test pass. Both native client settings
+and normal client caches remain unactivated.
 
 ## Current isolated checks
 
@@ -80,8 +111,17 @@ The adopted dependency lock passed 318 tests: 116 backend, 8 web, 52 gateway,
 passed, with no failed or skipped tests in that run. A subsequent composition
 test passed three complete snapshots through the normal gateway, fixed relay,
 Unix HTTPS adapter and synthetic TLS service: 21 requests including each oldest
-`NO_DATA` row. It did not reproduce the live failure. These are functional tests,
-not a claim of vulnerability-free code or deployed end-to-end success.
+`NO_DATA` row. It did not reproduce the live failure. Seven additional lifecycle
+tests passed with SOCKS half-closes, retained TLS writable halves, fragmented and
+different address-type replies, rejected handshakes and early client FIN. Relay
+slots were released in those fixtures; this also did not reproduce the live
+timeout. The same eight composition/lifecycle tests also passed on the pinned
+AMD64 Node image under OrbStack translation, with the same Node/OpenSSL versions;
+that is not a native Railway network reproduction. The temporary diagnostic
+overlays passed the relevant lifecycle and snapshot tests. The final staging
+runtime change passed 44 focused tests with verified isolation and cleanup.
+These are functional tests, not a claim of vulnerability-free code or universal
+deployed reliability.
 
 Registry fetching and execution were separate. All 569 selected package
 artifacts passed integrity checks; installation and tests ran offline in verified
