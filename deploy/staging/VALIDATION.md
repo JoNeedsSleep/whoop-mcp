@@ -84,8 +84,9 @@ succeeded over DERP. This supports a direct-path-dependent failure, not a proven
 MTU diagnosis or a general Tailscale defect.
 
 The verified synthetic staging wrapper now enables that gateway-only workaround.
-The production backend/gateway wrappers and local transports retain their normal
-defaults. A fresh normal deployment restored the guarded entrypoint and removed
+Backend and local transports retain their normal defaults; the prepared
+production gateway now has the same explicit reviewed opt-in, as covered below.
+A fresh normal staging deployment restored the guarded entrypoint and removed
 all temporary probes, stage logging and byte-count diagnostics. Its reviewed
 20-file source artifact passed 44 focused regression tests; Railway reported a
 successful deployment and normal synthetic startup. See the
@@ -106,8 +107,17 @@ and normal client caches remain unactivated.
 
 Two later disposable Claude retries also remained unavailable; the subsequent
 status-only check again returned HTTP 429. All owned scratch containers/volumes
-were removed and original client state was preserved. A successful full Claude
-snapshot remains outstanding; its browser callback success is a separate result.
+were removed and original client state was preserved.
+
+At 06:06 UTC on 2026-10-19, after the earlier successful seven-admission Codex
+snapshot had aged out of the unchanged one-hour quota window, the Claude retry
+passed against the clean deployment. It fetched all seven expected synthetic
+rows, rejected an immediate second sync as limited, and passed offline MCP
+initialization, the fixed tool list and numeric response. Its reader had only
+the scratch cache mounted read-only and no network. All scratch resources were
+removed with no unresolved creates; original client caches and admission state
+were unchanged. This completes both client-specific synthetic proofs at the
+deployment points described above; native client settings remain unactivated.
 
 ## Current isolated checks
 
@@ -175,6 +185,23 @@ volume creation because Docker omitted its empty command metadata; the corrected
 check preserved the expected image configuration. These local results do not
 establish provider delivery, concurrent deployment or interrupted-phase recovery.
 See [database validation](../postgres/VALIDATION.md) for the exact evidence.
+
+Final configuration delivery was then tested separately: the backend consumer
+passed nine tests and an actual packaged AMD64 variable-to-stdin smoke, preserving
+identity/node bytes and publishing private CA then app configuration. The gateway
+consumer passed 22 tests and a packaged fixed-file hash inspection and synthetic
+cutover, preserving owner/client settings, SQLite and node state. It requires a
+fully stopped gateway; its runtime lock does not make overlapping deployments
+safe. Old synthetic grants must be revoked and verified as 401 before cutover.
+Both helpers start no application or network service. Exact source hashes,
+offline isolation and all owned-container removals passed independent review.
+
+The normal production gateway image separately passed three packaged startup
+checks: missing configuration, shell-level bootstrap rejection and removal of
+hostile Node/OpenSSL environment before Node. All 16 source/context hashes match
+passing test inventories. These checks prepare immutable artifacts; they do not
+establish live secret delivery or real-data deployment. See the
+[deployment preparation](../railway/README.md#configuration-delivery-preparation-2026-10-19).
 
 Registry fetching and execution were separate. All 569 selected package
 artifacts passed integrity checks; installation and tests ran offline in verified

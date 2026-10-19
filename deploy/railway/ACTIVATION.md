@@ -88,6 +88,28 @@ variables are removed before normal deployment. Do not reuse the synthetic provi
 schema for real credentials or print secret-bearing configuration, database URLs
 or responses.
 
+Revoke the temporary production operator token and remove its isolated CLI
+container after the approved operation, within 24 hours at the latest. Do not
+extend human delegation silently. The pinned CLI's variable-delete command can
+redeploy the current phase: account for that behavior, verify phase completion,
+and deliberately select the normal command and reviewed artifact. Removing a
+variable alone is not proof that the intended normal deployment is running.
+
+After owner verification and database finalization, the separate
+[backend configuration helper](../backend-provision/README.md) accepts only the
+confirmed numeric owner ID, matching existing WHOOP app identity, restricted
+database credential, public CA, session/encryption keys and service-token hash.
+It preserves identity and node state and publishes `app.json` last. Its nine
+tests and packaged offline smoke passed; this is not live provider verification.
+
+The [gateway helper](../gateway-provision/README.md) first reports only four
+fixed configuration-file hashes for the stopped gateway. The one-use cutover
+envelope binds those exact bytes, the approved backend hostname/address and a
+fresh machine credential. It preserves owner/client configuration, SQLite and
+node state, blocks startup during partial replacement and publishes runtime
+configuration last. Its 22 tests and packaged inspection/cutover smoke passed.
+No helper grants permission to leave overlapping deployments on the same volume.
+
 ## Identity, consent and verification
 
 The WHOOP developer app exists with the exact proposed private callback and
@@ -114,8 +136,11 @@ environment must be explicitly scoped; do not broaden the staging CLI role.
 
 Before release, verify private TLS including negative certificate/hostname
 checks, runtime database permissions, cross-environment database denial, the
-exact WHOOP callback, secure cookies and allowed identity. Then revoke synthetic
-client grants, obtain fresh client authorizations, and verify sequential Codex
+exact WHOOP callback, secure cookies and allowed identity. Revoke all synthetic
+gateway grants, codes, pending flows and owner sessions using the existing owner
+route, and verify old grants return 401 **before** stopping the gateway and
+changing its upstream to real data. Preserve the quota database through cutover.
+Then obtain fresh client authorizations and verify sequential Codex
 and Claude syncs through their separate offline readers. Record status/schema
 counts rather than health values. Native client configuration is a separate
 activation step and has not yet been installed.

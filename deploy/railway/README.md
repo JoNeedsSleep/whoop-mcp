@@ -237,7 +237,9 @@ exact private dashboard callback in the approved tailnet browser, both client
 loopback callbacks, seven-day reuse/expiry, owner/client revocation and hourly
 sync/cache expiry. Configure Codex/Claude only for the pinned offline reader.
 Keep account credentials out of test output and retain sanitized evidence.
-Neither installed clients nor these live account/network checks have run here.
+Live synthetic Tailscale and callback results are recorded in
+[staging validation](../staging/VALIDATION.md). Real WHOOP checks and native
+client configuration remain unperformed.
 
 
 ## Backend TLS preparation validation (2026-10-19)
@@ -262,3 +264,23 @@ TLS check was weakened. The CA remains writable by the remote service's own UID,
 Railway's accepted isolation limits remain, and runtime advisories are not
 cleared. Actual billing, real database migrations and WHOOP consent still require
 their separate authorization.
+
+## Configuration delivery preparation (2026-10-19)
+
+Use the separately reviewed [backend](../backend-provision/README.md) and
+[gateway](../gateway-provision/README.md) configuration helpers for the proposed
+real-data deployment. Their temporary variable-to-stdin delivery is an explicit
+approval proposal described in the [activation plan](ACTIVATION.md), including
+provider history retention; the generic enrollment example above does not
+authorize that channel. The backend helper passed nine tests and its packaged
+smoke; the gateway helper passed 22 tests and a packaged inspector/cutover smoke.
+Both preserve existing identity/node state and start no network service.
+
+The normal gateway image now enters through a fixed shell that rejects
+provisioning inputs and clears inherited environment before Node. Image
+`sha256:ac5da5fe3949eb226124dc881e17005015edffdc59db7764fa3b4fabc1c1ba25`
+passed three separate packaged checks for missing configuration, explicit
+bootstrap rejection and hostile Node/OpenSSL environment removal. Sixteen
+packaged source hashes match passing isolated test inventories. All three
+temporary containers were removed. These are local AMD64 checks under OrbStack
+translation, not deployed Railway verification or a clean vulnerability scan.

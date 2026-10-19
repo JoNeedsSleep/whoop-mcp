@@ -9,6 +9,8 @@
 !deploy/railway/gateway-runtime.mjs
 !deploy/staging/
 !deploy/staging/runtime-check.mjs
+!deploy/gateway-provision/
+!deploy/gateway-provision/entrypoint.sh
 !restricted-local/
 !restricted-local/fixed-relay.mjs
 !restricted-local/unix-https.mjs

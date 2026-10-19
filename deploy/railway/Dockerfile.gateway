@@ -8,9 +8,10 @@ COPY --from=tailscale /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certi
 COPY deploy/railway/config.mjs deploy/railway/tailscale-supervisor.mjs deploy/railway/runtime.mjs ./deploy/railway/
 COPY deploy/railway/gateway-runtime.mjs ./deploy/railway/
 COPY deploy/staging/runtime-check.mjs ./deploy/staging/
+COPY deploy/gateway-provision/entrypoint.sh ./deploy/gateway-provision/
 COPY restricted-local/fixed-relay.mjs restricted-local/unix-https.mjs ./restricted-local/
 COPY review-gateway/gateway.mjs review-gateway/auth.mjs review-gateway/store.mjs review-gateway/server.mjs review-gateway/config.mjs review-gateway/index.mjs ./review-gateway/
 USER node
 ENV NODE_ENV=production
-ENTRYPOINT ["/usr/bin/setpriv", "--no-new-privs", "--", "/usr/local/bin/node", "/app/deploy/railway/gateway-runtime.mjs"]
-CMD ["/data/config/runtime.json"]
+ENTRYPOINT ["/usr/bin/setpriv", "--no-new-privs", "--", "/bin/sh", "/app/deploy/gateway-provision/entrypoint.sh"]
+CMD ["normal"]
