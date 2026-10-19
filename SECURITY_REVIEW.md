@@ -1,6 +1,26 @@
 # WHOOP security review branch
 
 Review draft based on upstream `148f12076885cfe3f5f35b21a315ff71832c11e2`.
+
+The owner subsequently chose quiet local security receipts instead of external
+alerting. See [the receipt checker](deploy/local-receipts/README.md) for its
+limited coverage. It is an independent observation from the laptop, not an
+intrusion detector or a promise that compromise will trigger a notification.
+The unused external-monitoring implementation and test evidence were archived
+locally; no monitoring credentials or telemetry were delivered to the services.
+The unconnected Better Stack alert was paused and the additional Railway
+all-events notification override was removed. Tailscale change alerts remain
+pending by the owner's choice.
+
+The receipt checker passed independent review and eight isolated tests. A
+separate credential-free live check on 2026-10-19 verified gateway TLS and the
+expected unauthenticated 401 challenge. An hourly laptop heartbeat now writes
+private receipts with routine notifications muted and a pinned checker hash.
+Deployment/configuration/Tailscale changes, suspicious login activity and
+upstream health are explicitly outside its coverage. It cannot report while
+the laptop or app is unavailable and cannot reliably detect a compromised
+gateway that continues returning the expected challenge.
+
 This remains a draft security review, not production approval. The user authorized private synthetic Railway staging, dependency review, and Tailscale/client callback tests using their personal account, then requested real WHOOP integration. Real-data preparation is now authorized, but activation remains pending the documented runtime gates, account authorization and live verification; the current deployment still contains synthetic data only. DNS changes and merging remain out of scope. The remediated dependency lock passed 318 tests and both server/web builds in a fresh verified disposable Node 22 environment. The branch schema and database concurrency tests ran only in a separately approved, empty synthetic PostgreSQL fixture. See [dependency remediation](DEPENDENCY_REVIEW.md), [runtime findings](IMAGE_SECURITY_REVIEW.md), and [live staging validation](deploy/staging/VALIDATION.md) for the current results and unresolved limits; older validation sections below retain their original scope. Keep this PR draft and unmerged.
 
 On 2026-10-19, the owner explicitly accepted the documented personal Railway
