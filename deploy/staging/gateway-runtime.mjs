@@ -32,9 +32,9 @@ export function readStagingGateway({ root = '/data', identity = process } = {}) 
 
 export async function startStagingGateway({ enrollmentKey, root = '/data', identity = process, deploy = startDeployment } = {}) {
   const expected = readStagingGateway({ root, identity });
-  // The verified synthetic wrapper alone enables this pinned-vendor workaround.
-  // Real deployments and local transports keep the ordinary default transport.
-  return deploy(expected.runtime, { enrollmentKey, syntheticStagingRelayOnly: true, readAppConfig: filename => {
+  // Both reviewed gateway wrappers explicitly enable this vendor workaround.
+  // Backend roles and local transports retain ordinary default transport.
+  return deploy(expected.runtime, { enrollmentKey, gatewayRelayOnly: true, readAppConfig: filename => {
     if (filename !== '/data/config/app.json') fail();
     return structuredClone(expected.app);
   } });

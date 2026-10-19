@@ -91,11 +91,14 @@ test('shared backend dispatch fixes child environment, role, port and disabled m
   const raw = Object.fromEntries(['DATABASE_URL', 'ENCRYPTION_KEY', 'WHOOP_CLIENT_ID', 'WHOOP_CLIENT_SECRET', 'SESSION_SECRET',
     'ALLOWED_WHOOP_USER_ID', 'GATEWAY_SERVICE_TOKEN_SHA256'].map(key => [key, 'synthetic']));
   raw.PUBLIC_BASE_URL = 'https://' + CONFIG.hostname;
+  raw.DATABASE_HOST = 'db-fixture.railway.internal';
+  raw.DATABASE_URL = 'postgresql://whoop_runtime:synthetic@db-fixture.railway.internal:5432/whoop?sslmode=verify-full&sslrootcert=%2Fdata%2Fconfig%2Fdb-ca.pem';
+  const { DATABASE_HOST: _host, ...childConfig } = raw;
   const started = await startBackendRuntime(options({ deploy: (config, settings) => startDeployment(config, { ...settings,
-    readAppConfig: filename => { assert.equal(filename, CONFIG.appConfigFile); return raw; }, gateway: forbidden,
+    readAppConfig: filename => { assert.equal(filename, CONFIG.appConfigFile); return raw; }, readDatabaseCa: () => {}, gateway: forbidden,
     tailscale: async node => { assert.equal(node.tag, 'tag:whoop-backend'); assert.equal(node.port, 8080);
       return { failed: new Promise(() => {}), close: async () => { nodeClosed = true; } }; },
-    backend: async env => { assert.deepEqual(env, { ...raw, PATH: '/usr/local/bin:/usr/bin:/bin', NODE_ENV: 'production',
+    backend: async env => { assert.deepEqual(env, { ...childConfig, PATH: '/usr/local/bin:/usr/bin:/bin', NODE_ENV: 'production',
       BIND_HOST: '127.0.0.1', PORT: '8080', RUN_MIGRATIONS: 'false', ENABLE_LEGACY_DIRECT_MCP: 'false', APPROVED_CLIENT_REDIRECT_URIS: '' });
       return { failed: new Promise(() => {}), close: async () => { appClosed = true; } }; } }) }));
   await started.runtime.close(); assert.equal(nodeClosed, true); assert.equal(appClosed, true);

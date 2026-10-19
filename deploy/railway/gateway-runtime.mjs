@@ -26,7 +26,9 @@ export async function startGatewayRuntime({ args = [CONFIG_FILE], identity = pro
     const enrollmentKey = enrolled ? await readKey(input) : undefined;
     // Keep the shared runtime's fixed gateway role, private TLS upstream and
     // enrollment-without-app behavior. No backend can be selected by this image.
-    const runtime = await deploy(config, { enrollmentKey });
+    // Explicit reviewed workaround for the pinned vendor's direct-path failure.
+    // This source constant is not configurable through JSON, CLI or environment.
+    const runtime = await deploy(config, { enrollmentKey, gatewayRelayOnly: true });
     return { runtime, enrolled };
   } catch { fail(); }
 }

@@ -70,3 +70,51 @@ The shared base also ships global npm/corepack libraries, producing 11 high pack
 For synthetic private staging, apply and verify the targeted HTTP/2 mitigation, exact tailnet grants, no public/Funnel ingress, resource limits and the actual callback/TLS checks. Keep the absence of WHOOP credentials and data explicit. Disclose remaining package findings and Node's pending release; these controls do not make the image advisory-free.
 
 Before real-data activation, replace affected runtimes with reviewed patched vendor builds, update the Debian fixable packages and application lockfile, rebuild pinned artifacts, and repeat the relevant isolated tests and image review. Check actual hosting UID, filesystem, capability and network behavior. Preserve a dated record of every accepted residual condition rather than suppressing scanner rows wholesale.
+
+## PostgreSQL preparation and personal-runtime exception — 2026-10-19
+
+The owner explicitly accepted the documented personal Railway runtime residuals,
+including unresolved runtime advisories. This is an exception to the preceding
+release target, not remediation or a clean-scan claim. It did not authorize new
+paid resources, real migrations or WHOOP consent.
+
+The newly selected official PostgreSQL 17.11 bookworm AMD64 image,
+`sha256:66aafa11cf15800a3c94763f7e11d1e7b2e37e5e84bc4ce027cb6e1e4bfaf4df`,
+was scanned as inert archive data using the same pinned scanner and verified
+October 18 advisory database. No target entrypoint executed. The scanner's
+network-none, read-only, non-root boundary and exact container/temporary-volume
+cleanup were verified again. Evidence is retained outside Git under
+`private-20261018a/postgres-vulnerability-review-20261019a/`.
+
+The scan found **6 critical, 100 high, 131 medium, 45 low and 125 negligible**
+advisory/package/version matches. The six critical matches represent three
+advisories, rather than six independent remote attack paths. No high/critical
+match named the PostgreSQL package. All 106 high/critical package matches were
+marked either not-fixed or won't-fix for this distribution in that database;
+this does not mean no other distribution or newer base can reduce them.
+
+* [CVE-2026-5450](https://security-tracker.debian.org/tracker/CVE-2026-5450)
+  matches four glibc binary packages. It has the same unusual scanf conversion
+  prerequisite described above. The bookworm issue remains; no relevant server
+  call path was demonstrated.
+* [CVE-2026-6653](https://security-tracker.debian.org/tracker/CVE-2026-6653)
+  affects libxml2 parsing of malicious XML. PostgreSQL can expose XML operations
+  to an authenticated SQL client, so restricted table grants alone are not proof
+  of unreachability after application/database-credential compromise. Debian
+  classifies this as a minor postponed issue on bookworm; the scanner labels
+  the package match critical. The differing labels do not patch the component.
+* [CVE-2025-7458](https://security-tracker.debian.org/tracker/CVE-2025-7458)
+  matches the installed SQLite library and requires crafted SQLite statements.
+  The PostgreSQL service uses PostgreSQL, not SQLite. No service call path into
+  this SQLite parser was demonstrated; package presence remains recorded.
+* The high OpenSSL match,
+  [CVE-2026-84782](https://security-tracker.debian.org/tracker/CVE-2026-84782),
+  concerns DTLS retransmission. The proposed database listener uses TLS over TCP,
+  not DTLS. This narrows the described path without claiming all library findings
+  are unreachable.
+
+Other package matches remain untriaged in the retained report. Mandatory verified
+TLS, SCRAM authentication, no public database ingress, separate Railway networks,
+restricted roles and resource limits reduce exposure; they do not turn these
+package findings into fixed vulnerabilities. The exact prepared PostgreSQL image
+and its accepted limitations must remain visible in the final activation review.

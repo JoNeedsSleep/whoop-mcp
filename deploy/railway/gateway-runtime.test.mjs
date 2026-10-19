@@ -68,10 +68,10 @@ test('backend, unknown role and invalid gateway config fail before consuming enr
 
 test('normal gateway dispatch follows guards and passes no inherited environment or enrollment input', async () => {
   const events = []; const started = runtime();
-  const result = await startGatewayRuntime(options({ environment: { NODE_OPTIONS: 'secret sentinel', HTTP_PROXY: 'secret sentinel' },
+  const result = await startGatewayRuntime(options({ environment: { NODE_OPTIONS: 'secret sentinel', HTTP_PROXY: 'secret sentinel', TS_DEBUG_ALWAYS_USE_DERP: 'false' },
     noNewPrivileges: () => events.push('kernel'), readConfig: filename => { events.push('config'); assert.equal(filename, '/data/config/runtime.json'); return CONFIG; },
     deploy: async (config, settings) => { events.push('deploy'); assert.deepEqual(config, CONFIG); assert.notEqual(config, CONFIG);
-      assert.deepEqual(settings, { enrollmentKey: undefined }); return started; } }));
+      assert.deepEqual(settings, { enrollmentKey: undefined, gatewayRelayOnly: true }); return started; } }));
   assert.deepEqual(events, ['kernel', 'config', 'deploy']);
   assert.deepEqual(result, { runtime: started, enrolled: false });
 });
@@ -82,7 +82,7 @@ test('enrollment remains explicit, reads only injected input after role checks, 
     readKey: async stream => { events.push('input'); assert.equal(stream, input); return key; },
     deploy: (config, settings) => startDeployment(config, { ...settings, readAppConfig: forbidden, backend: forbidden, gateway: forbidden,
       tailscale: async node => { events.push('node'); assert.deepEqual(node, { stateDirectory: '/data/tailscale', tag: 'tag:whoop-gateway',
-        hostname: CONFIG.hostname, port: 8787, enrollmentKey: key }); return { failed: new Promise(() => {}), close: async () => { closed = true; } }; } }) }));
+        hostname: CONFIG.hostname, port: 8787, enrollmentKey: key, gatewayRelayOnly: true }); return { failed: new Promise(() => {}), close: async () => { closed = true; } }; } }) }));
   assert.deepEqual(events, ['input', 'node']); assert.equal(result.enrolled, true); assert.equal(closed, true);
 });
 
@@ -97,7 +97,7 @@ test('shared gateway dispatch fixes role, loopback port and backend destination 
   const started = await startGatewayRuntime(options({ deploy: (config, settings) => startDeployment(config, { ...settings,
     readAppConfig: filename => { assert.equal(filename, CONFIG.appConfigFile); return raw; }, backend: forbidden,
     tailscale: async node => { assert.deepEqual(node, { stateDirectory: '/data/tailscale', tag: 'tag:whoop-gateway',
-      hostname: CONFIG.hostname, port: 8787, enrollmentKey: undefined });
+      hostname: CONFIG.hostname, port: 8787, enrollmentKey: undefined, gatewayRelayOnly: true });
       return { failed: new Promise(() => {}), close: async () => { nodeClosed = true; } }; },
     gateway: async (appConfig, backendIpv4) => { assert.deepEqual(appConfig, raw); assert.equal(backendIpv4, CONFIG.backendIpv4);
       return { failed: new Promise(() => {}), close: async () => { appClosed = true; } }; } }) }));

@@ -102,7 +102,7 @@ test('verified synthetic wrapper alone enables gateway relay mode with separate 
   const root = temporary(t); const expected = gatewayConfiguration(MARKER); const calls = [];
   const deploy = async (runtime, options) => {
     calls.push(options.enrollmentKey); assert.deepEqual(runtime, expected.runtime);
-    assert.equal(options.syntheticStagingRelayOnly, true);
+    assert.equal(options.gatewayRelayOnly, true);
     assert.deepEqual(options.readAppConfig('/data/config/app.json'), expected.app);
     assert.throws(() => options.readAppConfig('/data/config/other.json'));
     return { close: async () => {}, failed: new Promise(() => {}) };

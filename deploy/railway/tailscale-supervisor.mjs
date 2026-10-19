@@ -12,9 +12,9 @@ export const childEnvironment = Object.freeze({ PATH: '/usr/local/bin:/usr/bin:/
 // handler. Disable its HTTP/2 server paths while retaining HTTPS and HTTP/1.1.
 // This is a literal daemon-only setting, never inherited from the operator.
 export const daemonEnvironment = Object.freeze({ ...childEnvironment, GODEBUG: 'http2server=0' });
-// Temporary synthetic staging workaround for the pinned vendor's direct-path
+// Explicit gateway workaround for the pinned vendor's direct-path
 // failure. This debug setting is not a stable production transport API.
-const stagingRelayEnvironment = Object.freeze({ ...daemonEnvironment, TS_DEBUG_ALWAYS_USE_DERP: 'true' });
+const gatewayRelayEnvironment = Object.freeze({ ...daemonEnvironment, TS_DEBUG_ALWAYS_USE_DERP: 'true' });
 export function expectedServe(hostname, port) {
   if (hostname === undefined && port === undefined) return {};
   tailnetHostname(hostname);
@@ -89,10 +89,10 @@ export async function readEnrollmentKey(input) {
   if (!/^tskey-auth-[A-Za-z0-9_-]{20,220}$/.test(key)) fail();
   return key;
 }
-export async function startTailscale({ stateDirectory, tag, hostname, port, enrollmentKey, syntheticStagingRelayOnly = false }, {
+export async function startTailscale({ stateDirectory, tag, hostname, port, enrollmentKey, gatewayRelayOnly = false }, {
   command = runCommand, spawnFn = spawn, wait = delay, startupAttempts = 60,
 } = {}) {
-  if (typeof syntheticStagingRelayOnly !== 'boolean' || (syntheticStagingRelayOnly && tag !== 'tag:whoop-gateway')) fail();
+  if (typeof gatewayRelayOnly !== 'boolean' || (gatewayRelayOnly && tag !== 'tag:whoop-gateway')) fail();
   process.umask(0o077); privateDirectory(stateDirectory);
   if (!/^tag:whoop-(?:local-codex|local-claude-code|gateway|backend)$/.test(tag)) fail();
   const local = tag.startsWith('tag:whoop-local-');
@@ -142,7 +142,7 @@ export async function startTailscale({ stateDirectory, tag, hostname, port, enro
     if (version.trim().split('\n')[0] !== TS_VERSION) fail();
     daemon = spawnFn(DAEMON_BIN, ['--tun=userspace-networking', `--state=${stateFile}`, `--statedir=${stateDirectory}`,
       `--socket=${socket}`, '--socks5-server=127.0.0.1:1055', '--no-logs-no-support'],
-    { env: syntheticStagingRelayOnly ? stagingRelayEnvironment : daemonEnvironment, stdio: 'ignore' });
+    { env: gatewayRelayOnly ? gatewayRelayEnvironment : daemonEnvironment, stdio: 'ignore' });
     daemon.on('error', () => { if (daemon.pid === undefined) daemonEnded = true; resolveFailure(); });
     daemon.once('exit', () => { daemonEnded = true; if (!closed) resolveFailure(); });
     daemon.once('close', () => { daemonEnded = true; if (!closed) resolveFailure(); });

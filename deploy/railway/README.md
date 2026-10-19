@@ -14,6 +14,12 @@ same container. Gateway Serve terminates private HTTPS443 and proxies to
 binds a public interface. The gateway reaches only the configured backend's
 tailnet IPv4:443 through its local SOCKS5 daemon and a fixed Unix relay. The
 application still verifies the backend's HTTPS certificate and exact hostname.
+The gateway wrapper explicitly enables the pinned vendor's experimental
+`TS_DEBUG_ALWAYS_USE_DERP=true` daemon setting to avoid the direct-path TLS
+failure reproduced in private staging. This reviewed source constant is not an
+environment, JSON or CLI option; backend/local roles cannot enable it. It retains
+TLS verification and HTTP/2 mitigation, but adds relay dependence and remains an
+accepted personal-deployment limitation rather than a stable vendor API.
 No generic proxy, HTTP fallback, `https+insecure`, TUN device, NET_ADMIN, exit
 node, route advertisement, Tailscale SSH, web management or Funnel is enabled.
 
@@ -103,7 +109,7 @@ node. The gateway app config uses the existing
 Provision the independent owner-secret hash and service credential through the
 reviewed gateway helper; no secret appears in this document or image.
 
-The backend app JSON has exactly these string keys: `DATABASE_URL`,
+The backend app JSON has exactly these string keys: `DATABASE_URL`, `DATABASE_HOST`,
 `ENCRYPTION_KEY`, `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, `PUBLIC_BASE_URL`,
 `SESSION_SECRET`, `ALLOWED_WHOOP_USER_ID`, `GATEWAY_SERVICE_TOKEN_SHA256`.
 `PUBLIC_BASE_URL` must equal its private HTTPS origin. The wrapper forces
@@ -112,6 +118,27 @@ The backend app JSON has exactly these string keys: `DATABASE_URL`,
 Migrations are a separately approved one-off operation against the dedicated DB,
 after reviewing backups and invalidation effects; normal startup never applies
 them. Keep PostgreSQL private with a restricted application role.
+
+`DATABASE_HOST` must be the approved single service label followed by
+`.railway.internal`. It binds the destination independently of the URI and is
+not forwarded to the backend process. `DATABASE_URL` must have this exact shape
+(with a canonical percent-encoded password and approved role/database names):
+
+```text
+postgresql://whoop_runtime:<encoded-password>@<DATABASE_HOST>:5432/whoop?sslmode=verify-full&sslrootcert=%2Fdata%2Fconfig%2Fdb-ca.pem
+```
+
+No alternate port, public/IP/socket host, fragment, extra/duplicate query option,
+TLS override or alternate CA path is accepted. Provision only the dedicated CA's
+public certificate at `/data/config/db-ca.pem`, owned by UID1000, mode0600, in the
+private mode0700 config directory. The wrapper checks a regular single-link file,
+bounded certificate-only contents, CA status and validity before starting the
+backend or its daemon. PostgreSQL's certificate must have the exact approved
+private hostname in its SAN. The pinned application `pg` driver then verifies
+that name and issuer with `sslmode=verify-full`; there is no plaintext fallback.
+The CA is reopened by `pg`, so this is not immutable pinning against a compromised
+same-UID process that can rewrite its own configuration. Keep the CA signing key
+outside both runtime containers.
 Register WHOOP's exact redirect as `https://<backend-name>/whoop/callback`.
 The dashboard's subsequent local completion is
 `https://<backend-name>/dashboard/connected`; it is not the WHOOP registration.
@@ -211,3 +238,27 @@ loopback callbacks, seven-day reuse/expiry, owner/client revocation and hourly
 sync/cache expiry. Configure Codex/Claude only for the pinned offline reader.
 Keep account credentials out of test output and retain sanitized evidence.
 Neither installed clients nor these live account/network checks have run here.
+
+
+## Backend TLS preparation validation (2026-10-19)
+
+The deployment wrapper now requires the exact approved private database hostname,
+canonical `verify-full` URI and private fixed-path CA before starting the backend
+or its daemon. A fresh offline Node22 fixture passed 83 Railway/staging tests,
+including the unchanged compiled backend's actual `pg` Pool over synthetic
+TLS/SCRAM. A matching hostname/CA succeeded; wrong SAN, untrusted CA and plaintext
+fallback were rejected. URI/TLS override inputs, unsafe CA files and startup
+ordering were also checked. No migration or real database was involved.
+
+The same snapshot separately tests the explicit gateway-only relay workaround:
+only the gateway wrappers opt in, backend/local defaults remain unchanged, and
+configuration/environment/CLI input cannot enable or override it. This does not
+relabel the previously deployed synthetic artifact as a real-data deployment.
+
+All twelve isolation probes, source hashes before/after execution and exact
+container cleanup passed. The initial negative TLS assertions were corrected to
+inspect Drizzle's preserved error cause; the rejected run was retained, and no
+TLS check was weakened. The CA remains writable by the remote service's own UID,
+Railway's accepted isolation limits remain, and runtime advisories are not
+cleared. Actual billing, real database migrations and WHOOP consent still require
+their separate authorization.

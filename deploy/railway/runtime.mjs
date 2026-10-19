@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { backendEnvironment, fail, parseDeploymentConfig, privateDirectory, readPrivateJson, tailnetHostname } from './config.mjs';
+import { backendEnvironment, fail, parseDeploymentConfig, privateDirectory, readBackendDatabaseCa, readPrivateJson, tailnetHostname } from './config.mjs';
 import { startTailscale, readEnrollmentKey } from './tailscale-supervisor.mjs';
 
 async function startBackend(env) {
@@ -54,15 +54,16 @@ export function validateAppConfig(config, raw) {
   if (raw.upstreamOrigin !== `https://${upstream.hostname}` || upstream.hostname === config.hostname) fail();
   return raw;
 }
-export async function startDeployment(raw, { enrollmentKey, syntheticStagingRelayOnly = false, tailscale = startTailscale,
-  readAppConfig = readPrivateJson, backend = startBackend, gateway = startPrivateGateway } = {}) {
+export async function startDeployment(raw, { enrollmentKey, gatewayRelayOnly = false, tailscale = startTailscale,
+  readAppConfig = readPrivateJson, readDatabaseCa = readBackendDatabaseCa, backend = startBackend, gateway = startPrivateGateway } = {}) {
   process.umask(0o077);
   const config = parseDeploymentConfig(raw);
-  if (typeof syntheticStagingRelayOnly !== 'boolean' || (syntheticStagingRelayOnly && config.role !== 'gateway')) fail();
+  if (typeof gatewayRelayOnly !== 'boolean' || (gatewayRelayOnly && config.role !== 'gateway')) fail();
   const appConfig = enrollmentKey === undefined ? validateAppConfig(config, readAppConfig(config.appConfigFile)) : undefined;
+  if (enrollmentKey === undefined && config.role === 'backend') readDatabaseCa();
   const node = await tailscale({ stateDirectory: config.stateDirectory, tag: `tag:whoop-${config.role}`, hostname: config.hostname,
     port: config.role === 'gateway' ? 8787 : 8080, enrollmentKey,
-    ...(syntheticStagingRelayOnly ? { syntheticStagingRelayOnly: true } : {}) });
+    ...(gatewayRelayOnly ? { gatewayRelayOnly: true } : {}) });
   let app; let closing;
   const close = () => closing ??= (async () => { try { await app?.close(); } finally { await node.close(); } })();
   try {

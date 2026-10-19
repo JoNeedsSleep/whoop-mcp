@@ -44,6 +44,9 @@ expires if sooner. An expired cache file may remain on disk until overwritten
 or removed; expiry prevents reader use and is not physical deletion. Database,
 hosting-volume and backup retention must be configured when real data is
 activated; no automatic deletion or backup-retention promise is made here.
+The backend's separately authorized WHOOP refresh grant can renew upstream
+access until disconnected or revoked; it does not expire merely because a
+seven-day gateway/client login expires.
 
 ## Control and limitations
 

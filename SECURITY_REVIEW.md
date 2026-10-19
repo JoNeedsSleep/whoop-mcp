@@ -3,6 +3,15 @@
 Review draft based on upstream `148f12076885cfe3f5f35b21a315ff71832c11e2`.
 This remains a draft security review, not production approval. The user authorized private synthetic Railway staging, dependency review, and Tailscale/client callback tests using their personal account, then requested real WHOOP integration. Real-data preparation is now authorized, but activation remains pending the documented runtime gates, account authorization and live verification; the current deployment still contains synthetic data only. DNS changes and merging remain out of scope. The remediated dependency lock passed 318 tests and both server/web builds in a fresh verified disposable Node 22 environment. The branch schema and database concurrency tests ran only in a separately approved, empty synthetic PostgreSQL fixture. See [dependency remediation](DEPENDENCY_REVIEW.md), [runtime findings](IMAGE_SECURITY_REVIEW.md), and [live staging validation](deploy/staging/VALIDATION.md) for the current results and unresolved limits; older validation sections below retain their original scope. Keep this PR draft and unmerged.
 
+On 2026-10-19, the owner explicitly accepted the documented personal Railway
+limitations: writable runtime filesystems, unrestricted outbound internet,
+unresolved runtime advisories and the experimental relay workaround. This is an
+exception to the stricter runtime target below, not a statement that those
+controls are deployed or the findings fixed. The decision expressly excluded
+new billing, real database migrations and WHOOP OAuth consent. The developer app
+has been created; no member has authorized it. See the [real-data activation
+plan](deploy/railway/ACTIVATION.md) for the separate remaining actions.
+
 ## Intended boundary
 
 A fully compromised WHOOP service must have no OpenAI login, OpenAI API key, browser session, GitHub token, SSH key, DNS credential, hosting administrator credential, unrelated application secret or unrelated filesystem mount to steal. WHOOP health data and the service's WHOOP-specific tokens are within the assumed compromise. The remaining `read:profile` permission also makes name/email available to a compromised service; dropping the profile tool alone cannot prevent that.
@@ -66,7 +75,7 @@ The gateway protections alone assume that gateway remains trusted. A compromised
 
 ## Isolation and release requirements
 
-1. Keep the static jojiao.com website on GitHub Pages. No website or School files, DNS, hosting, account connections or existing credentials were changed for this work. A future WHOOP subdomain can be decided separately.
+1. Keep the static jojiao.com website on GitHub Pages. Website and School files and DNS remain outside this task's changes. Hosting, personal Tailscale and account actions are limited to the explicit approvals recorded above and in the activation plan. A future WHOOP subdomain can be decided separately.
 2. Build only in a disposable VM or a verified container/sandbox without personal home directories, browser state, SSH agents, Docker socket, cloud instance credentials or credential forwarding. Use an empty environment and only the source snapshot. Do not run npm, the local extension, or this service directly against a personal home directory.
 3. Dependency fetching is a separate phase: registry egress only, `npm ci --ignore-scripts --no-audit --no-fund`; review resolved artifacts before execution. Build/test offline with synthetic fixtures. Database integration tests require a dedicated disposable PostgreSQL database, never a service/production database. Lifecycle scripts were not inspected exhaustively, and disabling scripts does not make dependency code trusted.
 4. Runtime requires a dedicated WHOOP database role/database and only WHOOP-specific secrets. Use a read-only root filesystem, limited tmpfs, no host mounts, no privilege escalation, dropped capabilities, resource limits and default-deny egress allowing WHOOP plus the dedicated database. These controls are deployment requirements, not enforced by the Dockerfile alone.

@@ -1,0 +1,12 @@
+# Temporary profile-only identity artifact, no npm, compiled backend or database.
+FROM tailscale/tailscale@sha256:99691662a2e82fbfd2bf55db0fd52bacd2f4664ce6fd1deca3746a024144a2b7 AS tailscale
+FROM node@sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562
+WORKDIR /app
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
+COPY --from=tailscale /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY deploy/railway/config.mjs deploy/railway/tailscale-supervisor.mjs ./deploy/railway/
+COPY deploy/staging/runtime-check.mjs ./deploy/staging/
+COPY deploy/identity/verify.mjs deploy/identity/runtime.mjs deploy/identity/provision.mjs deploy/identity/entrypoint.sh ./deploy/identity/
+USER node
+ENTRYPOINT ["/usr/bin/setpriv", "--no-new-privs", "--", "/bin/sh", "/app/deploy/identity/entrypoint.sh"]
+CMD ["verify"]

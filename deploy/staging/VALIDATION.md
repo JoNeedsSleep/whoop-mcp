@@ -104,6 +104,11 @@ hour quota returned HTTP 429. Its scratch resources were also removed. The quota
 has not been reset or relaxed to make the test pass. Both native client settings
 and normal client caches remain unactivated.
 
+Two later disposable Claude retries also remained unavailable; the subsequent
+status-only check again returned HTTP 429. All owned scratch containers/volumes
+were removed and original client state was preserved. A successful full Claude
+snapshot remains outstanding; its browser callback success is a separate result.
+
 ## Current isolated checks
 
 The adopted dependency lock passed 318 tests: 116 backend, 8 web, 52 gateway,
@@ -123,6 +128,54 @@ runtime change passed 44 focused tests with verified isolation and cleanup.
 These are functional tests, not a claim of vulnerability-free code or universal
 deployed reliability.
 
+The subsequent real-backend preparation passed 83 focused tests: actual compiled
+database-client TLS acceptance and three rejection cases, seven URI/CA guard
+tests, and 72 existing Railway/staging regressions. The fixed CA file and exact
+private hostname are required before ordinary backend launch. The production
+gateway source now explicitly selects the same gateway-only experimental relay
+workaround the owner accepted; backend/local transport defaults stay unchanged.
+This is tested source preparation, not a new real-data deployment.
+
+The separate migration-only utility and stdin bridge passed 21 tests, including actual isolated
+PostgreSQL migrations, ledger checks, concurrency, rollback/deadline cleanup and
+TLS/password failures. It uses standard Drizzle with a temporary CREATE privilege
+on one dedicated database; the runtime role does not receive that privilege.
+No real migration ran. All 12 isolation checks, source hashes and owned-resource
+cleanup were verified for both preparation runs. Earlier fixture/assertion
+failures remain retained in the operator evidence.
+
+The dedicated PostgreSQL package then passed isolated checks of its actual
+TLS/SCRAM configuration, provisioning/migration/finalization SQL, runtime CRUD
+permissions and forbidden schema/ledger operations. Migration access stays
+disabled when final validation rejects a held session or extra ledger entry.
+Restart and unsafe key-mode rejection also passed. The 12 recorded checks include
+repeated permission checks, rather than 12 independent test cases. The exact
+AMD64 package, source hashes and owned-resource cleanup were verified. The
+separate migration image passed actual pg/Drizzle imports and its missing-config
+CLI smoke offline; it fetched no packages and contacted no database.
+
+The temporary profile-only identity verifier and provisioner passed 23 synthetic tests, including
+browser/state binding, concurrent callbacks, late-token revocation and the
+fixed-error CLI guard. This prepares an owner-confirmed identity check; it does
+not enroll the first production login or authorize health access. Its packaged
+provisioning bridge, secret-free root initialization, permanent privilege drop
+and hostile-environment clearing also passed. Deployment remains pending.
+
+The final PostgreSQL provisioner passed seven unit tests and 15 recorded workflow
+checks on one fresh named volume: root initialization, configure-only stdin
+delivery, enabling temporary migration access, the actual migration stdin
+utility, finalization, normal startup and restart. Runtime CRUD, denied DDL and
+ledger access, TLS rejection and migration revocation passed. The socket now
+lives on the dedicated volume, without a local-only runtime mount assumption.
+The final normal image is `sha256:60b49b540aca8ec2be2fb552bf2539a39cbcc971f83d64b18be17127dab64c53`;
+its provision image is `sha256:7620ff401b77e3a4f800891857f797ffc20d374a6092b1f46ffe12c424f49b14`.
+All 199 before/after source entries and 16 cleanup records, including the named
+volume, were verified independently. A retained harness failure occurred before
+volume creation because Docker omitted its empty command metadata; the corrected
+check preserved the expected image configuration. These local results do not
+establish provider delivery, concurrent deployment or interrupted-phase recovery.
+See [database validation](../postgres/VALIDATION.md) for the exact evidence.
+
 Registry fetching and execution were separate. All 569 selected package
 artifacts passed integrity checks; installation and tests ran offline in verified
 Node 22 containers without host files, credentials or SSH forwarding. The
@@ -132,17 +185,32 @@ the updated versions, retained failed attempts and unresolved advisories.
 
 ## Remaining real-data requirements
 
-Real activation needs the WHOOP developer application, its exact private HTTPS
-callback, the owner's numeric WHOOP identity verified before login, and the
-owner's OAuth consent. It also needs a dedicated database and restricted runtime
-role, separately authorized migrations, a newly built and reviewed backend,
-and a decision on the unresolved runtime findings in `DEPENDENCY_REVIEW.md` and
-`IMAGE_SECURITY_REVIEW.md`.
+The owner created the dedicated WHOOP developer app with its exact proposed
+private HTTPS callback and five read scopes; body measurements are excluded.
+No WHOOP member has authorized the app. App credentials were retained only in
+a scoped private operator file, not in Git or tool output. Real activation still
+needs the owner's numeric WHOOP identity verified before login, OAuth consent,
+a dedicated database and restricted runtime role, separately authorized real
+migrations, resource approval and deployed verification.
+
+The updated backend artifact was prepared offline from the tested source and
+lock. The first attempt correctly rejected an optional ARM64 TypeScript binary.
+After independently reviewed optional-dependency pruning, the artifact had no
+native files; the AMD64 image passed all 6,805 packaged file/hash/mode checks,
+12 isolation controls, synthetic loopback health and disabled-direct-MCP checks.
+It made no database connection and ran no migration. Execution used OrbStack's
+AMD64 translation and is not native Railway verification. This is a locally
+prepared artifact, not an activated backend or a clean vulnerability scan.
 
 Railway's observed writable root filesystem and default outbound internet access
 do not satisfy the stricter production boundary described in `SECURITY_REVIEW.md`.
 Tailscale ingress policy does not supply a default-deny egress firewall. A passing
 synthetic staging test cannot be used to claim those controls are deployed.
+The owner subsequently explicitly accepted the documented filesystem, outbound
+network, runtime-advisory and experimental-relay limitations for personal Railway
+use. That decision does not remediate them and did not itself authorize new
+billing, real migrations or OAuth consent. The review's stricter target remains
+the reference for describing what the deployment does and does not enforce.
 
 The restricted adapter currently supplies seven days of bounded numeric daily
 summaries. Seven-day login lifetime is a separate setting. Neither setting means
