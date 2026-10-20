@@ -10,8 +10,11 @@ single-use personal Tailscale enrollment key. The two private services and their
 volumes now exist with the approved compute limits. Backend node enrollment
 succeeded; its enrollment key is invalidated and its active bootstrap variable
 was removed. Database-only credentials have now been delivered through the
-reviewed non-root provisioning phase. The three migrations have not run; no
-confirmed numeric WHOOP owner ID or health-data grant has been obtained.
+reviewed non-root provisioning phase. The three migrations and subsequent
+finalization completed, including revocation of the temporary migration
+authority. The restored listener passed the independent runtime-role
+TLS/privilege probe. No confirmed numeric WHOOP owner ID or health-data grant
+has been obtained.
 
 The separately approved browser/gateway-to-backend HTTPS rule was saved and
 verified after reloading the policy, with eleven policy tests. The private
@@ -75,18 +78,33 @@ At the live checkpoint on 2026-10-19 (CDT), the database phases were:
   authentication or migration readiness.
 - The one-hour migration password-validity deadline elapsed before any
   migrations ran. Expiration prevents password authentication; it does not
-  itself revoke LOGIN, role membership or database CREATE. Renewal and final
-  revocation remain explicit setup steps. No renewal has been executed and
-  the database is not ready.
+  itself revoke LOGIN, role membership or database CREATE. This required
+  separate approval for one bounded renewal before migrations could proceed.
 - Inspection deployment `2ff863bb` verified the expected empty schemas and
   migration-role state, then shut down its local PostgreSQL process before
   reporting the existing deadline `2026-10-20T03:34:11.923887Z` at
   `2026-10-20T05:23:55.803633Z`. The inspection deployment was removed.
   Automatic approval review rejected the subsequent one-hour renewal request
   because the earlier migration approval did not clearly authorize extending
-  this expired credential. No renewal command executed. A specific owner
-  approval is pending; the reviewed command accepts only that inspected old
-  deadline and cannot renew twice. The database remains stopped meanwhile.
+  this expired credential. No renewal command executed at that point. The
+  owner subsequently approved the exact additional hour; the reviewed command
+  accepts only that inspected old deadline and cannot renew twice.
+
+The approved renewal subsequently succeeded. The one-off migration job emitted
+`Migrations completed.`, then was removed and its active bootstrap variable
+deleted. With the normal database stopped, the finalizer emitted
+`PostgreSQL preparation phase completed.` after committing migration-login,
+password, membership and database-grant revocation, removing the schema owner's
+temporary database CREATE privilege, and validating the exact tables and
+migration ledger before enabling runtime CRUD. It stopped its local PostgreSQL
+process before reporting success. The finalizer deployment was then removed
+and the default listener restored. The separate TLS-verified runtime-role probe
+reported `whoop-runtime-database-probe`, `passed: true` and `crudPrivileges: 24`,
+verifying the expected CRUD permissions and absence of the prohibited privileges
+checked by that probe. The probe deployment and its active runtime bootstrap
+variable were removed; the temporary service has no environment variables.
+These results do not establish backend or
+WHOOP activation.
 
 The fixed credential-free network probe passed source review and nine isolated
 tests with all twelve isolation checks. Production deployment `6cf3cee3`
@@ -104,9 +122,9 @@ The gateway was restored as deployment `bd0326bf`, **ACTIVE**, with the exact
 original staging gateway command. The private operator receipts
 `database-network-positive-receipt.json`, `database-network-negative-receipt.json`
 and `gateway-network-test-restoration-20261020.json` retain these results.
-Database TLS and runtime-role verification, migrations/finalization, WHOOP owner
-confirmation and health consent remain incomplete. Removing active provisioning
-variables does not erase provider history.
+Migrations, finalization and independent runtime-role TLS/privilege verification
+are complete. WHOOP owner confirmation and health consent remain incomplete.
+Removing active provisioning variables does not erase provider history.
 
 ## Resource change
 
