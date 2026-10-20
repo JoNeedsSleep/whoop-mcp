@@ -234,7 +234,7 @@ From approved and denied identities, verify ACLs, TLS hostname rejection,
 local fixed relay destination, blocked host/LAN/metadata/IPv6 egress, and absence
 of Tailscale state from login/sync/reader containers. Finally exercise WHOOP's
 exact private dashboard callback in the approved tailnet browser, both client
-loopback callbacks, seven-day reuse/expiry, owner/client revocation and hourly
+loopback callbacks, seven-day reuse/expiry, owner/client revocation and 15-minute
 sync/cache expiry. Configure Codex/Claude only for the pinned offline reader.
 Keep account credentials out of test output and retain sanitized evidence.
 Live synthetic Tailscale and callback results are recorded in

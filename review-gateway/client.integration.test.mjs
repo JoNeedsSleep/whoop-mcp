@@ -347,16 +347,16 @@ test("authorization rejects callback substitution, URL clients and public regist
   assert.equal(f.upstreamCalls.length, 0);
 });
 
-test("both clients share a durable thirty-call budget across a gateway restart", async (t) => {
+test("both clients share a durable seventy-call budget across a gateway restart", async (t) => {
   const f = await fixture(t);
   const sessions = [await authorize(f, f.clients[0]), await authorize(f, f.clients[1])];
   let clients = await Promise.all(sessions.map(({ provider }) => connect(f, provider)));
-  for (let i = 0; i < 29; i++) assert.deepEqual((await clients[i % 2].client.callTool(TOOL)).structuredContent, VALID);
+  for (let i = 0; i < 69; i++) assert.deepEqual((await clients[i % 2].client.callTool(TOOL)).structuredContent, VALID);
   await f.stop(); await f.start();
   clients = await Promise.all(sessions.map(({ provider }) => connect(f, provider)));
   assert.deepEqual((await clients[1].client.callTool(TOOL)).structuredContent, VALID);
   for (const { client } of clients) await assert.rejects(client.callTool(TOOL), (error) => error.code === 429);
-  assert.equal(f.upstreamCalls.length, 30);
+  assert.equal(f.upstreamCalls.length, 70);
 });
 
 test("malicious upstream data never becomes tools, instructions, resources or client error details", async (t) => {

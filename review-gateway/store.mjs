@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, statSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
+import { MAX_SUMMARY_CALLS_PER_HOUR } from "./gateway.mjs";
 
 // One dedicated gateway replica; its durable database is never shared with WHOOP.
 // SQLite transactions also coordinate separate handles to the same local file.
@@ -77,7 +78,7 @@ export class GatewayStore {
       return true;
     });
   }
-  acquireToolCall({ limit = 30, windowMs = 3600000, leaseMs = 15000 } = {}) {
+  acquireToolCall({ limit = MAX_SUMMARY_CALLS_PER_HOUR, windowMs = 3600000, leaseMs = 15000 } = {}) {
     return this.transaction(() => {
       const current = this.db.prepare("SELECT expires FROM tool_lease WHERE id=1").get();
       if (current && current.expires > this.now()) return null;

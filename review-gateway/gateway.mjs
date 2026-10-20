@@ -1,6 +1,9 @@
 // Trust boundary adapter. Deploy independently of the WHOOP server, after review.
 // No SDK discovery, model calls, secrets loading, tools supplied by upstream, or logging.
 export const MAX_BYTES = 4096;
+// Two clients x four snapshots/hour x seven summaries = 56 steady-state calls.
+// Keep a fixed 14-call allowance for variable timing at rolling-window edges.
+export const MAX_SUMMARY_CALLS_PER_HOUR = 70;
 const fail = () => { throw new Error("INVALID_HEALTH_DATA"); };
 const object = (v, keys) => {
   if (!v || typeof v !== "object" || Array.isArray(v) ||
@@ -85,7 +88,7 @@ export function createGateway({ origin, whoopBearer, fetchImpl = fetch, now = Da
       if (name !== TOOLS[0].name || active) fail();
       const args = validateInput(input);
       calls = calls.filter((t) => now() - t < 3600000);
-      if (calls.length >= 30) fail();
+      if (calls.length >= MAX_SUMMARY_CALLS_PER_HOUR) fail();
       calls.push(now()); active = true;
       try {
         const url = new URL("/internal/health-summary", origin);

@@ -36,7 +36,7 @@ async function fixture(t, overrides = {}) {
   };
   const store = overrides.store ?? {
     acquireToolCall: async () => {
-      if (active || acquired >= 30) return null;
+      if (active || acquired >= 70) return null;
       active = true; acquired++; return `lease-${acquired}`;
     },
     releaseToolCall: async () => { active = false; released++; },
@@ -292,9 +292,9 @@ test("enforces the shared store's limit and in-flight denial before calling upst
     assert.equal(calls, 1);
   } finally { release(); }
   assert.equal((await first).status, 200);
-  for (let i = 1; i < 30; i++) assert.equal((await f.request(toolCall())).status, 200);
+  for (let i = 1; i < 70; i++) assert.equal((await f.request(toolCall())).status, 200);
   assert.equal((await f.request(toolCall())).status, 429);
-  assert.equal(calls, 30); assert.deepEqual(f.counters(), { acquired: 30, released: 30 });
+  assert.equal(calls, 70); assert.deepEqual(f.counters(), { acquired: 70, released: 70 });
 });
 
 test("sanitizes auth/storage failures and fails closed", async (t) => {

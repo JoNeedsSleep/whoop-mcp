@@ -17,7 +17,7 @@ separation from the static site, and the provider's missing outbound firewall.
 Private transport source is implemented: a separate dedicated Tailscale container
 holds its own node state and exposes one fixed TLS byte relay to the isolated
 sync/login process. The reader remains offline; gateway grants last up to seven
-days, sync runs at most hourly, and cached data expires within 90 minutes.
+days, sync attempts are separated by at least 15 minutes, and cached data expires within 90 minutes.
 
 The approved Railway project `whoop_individual_kill-2026-11-18`
 (`657e4033-3a47-4d99-ad5a-f934e2a11528`) exists and is empty. No application service

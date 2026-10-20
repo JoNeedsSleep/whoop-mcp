@@ -2,7 +2,9 @@
 // fail-closed decisions; actual daemon/kernel isolation is verified separately.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { callbackFirewallScript, createLauncher, firewallScript, FIREWALL_IMAGE, parseOperatorConfig, transportFirewallScript, volumeNames } from "./launch.mjs";
+import { callbackFirewallScript, createLauncher, firewallScript, FIREWALL_IMAGE, parseOperatorConfig, transportFirewallScript, volumeNames,
+  watchClient, WATCH_INTERVAL_MS, WATCH_STAGGER_MS } from "./launch.mjs";
+import { SYNC_INTERVAL_MS, SNAPSHOT_TIMEOUT_MS } from "./sync.mjs";
 
 const config = Object.freeze({ origin: "https://health.example.test", approvedIpv4: "104.16.0.34",
   readerImage: `sha256:${"1".repeat(64)}`, syncImage: `sha256:${"2".repeat(64)}` });
@@ -13,6 +15,36 @@ const META = { rr_project_id: "whoop", rr_owner_id: "individual", rr_kill_date: 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const values = (args, key) => args.flatMap((value, index) => value === key ? [args[index + 1]] : []);
 const value = (args, key) => values(args, key)[0];
+
+test("both watches wait15minutes after completion and keep the separate Claude offset", async () => {
+  assert.equal(WATCH_INTERVAL_MS, 900000); assert.equal(WATCH_INTERVAL_MS, SYNC_INTERVAL_MS);
+  assert.equal(WATCH_STAGGER_MS, 61000); assert(WATCH_STAGGER_MS > SNAPSHOT_TIMEOUT_MS);
+  for (const clientId of ["codex", "claude-code"]) {
+    let time = 0; const starts = [], waits = [];
+    const stop = new Error("fixture complete");
+    await assert.rejects(watchClient({ sync: async (id) => {
+      assert.equal(id, clientId); starts.push(time); time += starts.length * 1000;
+    } }, clientId, { sleep: async (delay) => {
+      waits.push(delay); if (starts.length === 4) throw stop; time += delay;
+    }, reportFailure: () => assert.fail("Unexpected failure") }), error => error === stop);
+    const offset = clientId === "claude-code" ? 61000 : 0;
+    assert.deepEqual(starts, [0, 901000, 1803000, 2706000].map(value => value + offset));
+    assert.deepEqual(waits, [...(offset ? [offset] : []), 900000, 900000, 900000, 900000]);
+  }
+});
+
+test("long watch operations skip missed intervals and failures wait rather than retry", async () => {
+  let time = 0, failures = 0; const starts = [], waits = []; const stop = new Error("fixture complete");
+  await assert.rejects(watchClient({ sync: async () => {
+    starts.push(time);
+    if (starts.length === 1) time += 3 * WATCH_INTERVAL_MS + 7;
+    else throw new Error("untrusted diagnostic");
+  } }, "codex", { sleep: async (delay) => {
+    waits.push(delay); if (starts.length === 3) throw stop; time += delay;
+  }, reportFailure: (...args) => { assert.deepEqual(args, []); failures++; } }), error => error === stop);
+  assert.deepEqual(waits, [900000, 900000, 900000]);
+  assert.deepEqual(starts, [0, 3600007, 4500007]); assert.equal(failures, 2);
+});
 
 function fakeDocker({ mutateInspect, mutateVolume, mutateImage, intercept } = {}) {
   const calls = []; const containers = new Map(); let sequence = 0;

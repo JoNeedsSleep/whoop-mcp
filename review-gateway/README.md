@@ -29,11 +29,17 @@ defines its own tools and messages on the laptop.
 - `/owner` revokes Codex or Claude Code independently; revoke-all also invalidates
   owner sessions and pending flows/codes. Revocation stops subsequent checks,
   not a request already executing. Closing a client does not revoke its token.
-- SQLite persists hashed tokens, sessions, pending flows and a shared 30-call
+- SQLite persists hashed tokens, sessions, pending flows and a shared 70-summary-call
   rolling hourly budget. Failed tool calls count. One upstream request may run
   at a time; a crash lease expires after 15 seconds. Restarting or using both
   clients cannot reset the budget. Run one replica with one persistent local DB;
   separate database copies do not coordinate quotas or revocation.
+  Both the durable store and in-memory adapter enforce the same 70-call ceiling:
+  two clients × four snapshots/hour × seven summaries = 56 steady-state calls,
+  plus 14 of rolling-window timing allowance. This is a summary budget, not a
+  count of WHOOP API requests. Three WHOOP collections per summary mean about
+  168 ordinary API requests/hour (4,032/day) before bounded pagination, token
+  refresh and retries. This arithmetic is not a provider-limit or latency guarantee.
 - Explicit native loopback callbacks, fixed ports and exact paths. No wildcard
   redirects, client metadata fetching, CIMD, dynamic registration or client
   secrets. Both client registrations are configured before startup.

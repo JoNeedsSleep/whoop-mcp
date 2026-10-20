@@ -11,6 +11,10 @@ import { isTailnetTarget } from "./fixed-relay.mjs";
 export const DOCKER = "/usr/local/bin/docker";
 export const DOCKER_HOST = "unix:///Users/obsidian-gateway/.orbstack/run/docker.sock";
 export const FIREWALL_IMAGE = "sha256:66d292e5c26bd33a6f6f61cacb880de2186339a524ecba1ce098dbbaceed6515";
+// Duplicated deliberately from the isolated sync module: the host launcher does
+// not import its database/network implementation. Tests require exact equality.
+export const WATCH_INTERVAL_MS = 15 * 60000;
+export const WATCH_STAGGER_MS = 61000;
 const REVIEW_DATE = "2026-11-17";
 const unavailable = () => { throw new Error("RESTRICTED_LAUNCH_UNAVAILABLE"); };
 const imageId = (value) => typeof value === "string" && /^sha256:[a-f0-9]{64}$/.test(value);
@@ -332,6 +336,22 @@ export function createDockerRunner(directory) {
   });
 }
 
+// Test hooks are never selected by an MCP request or operator configuration.
+export async function watchClient(launcher, clientId, {
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  reportFailure = () => process.stderr.write("Restricted sync unavailable.\n"),
+} = {}) {
+  if (!clients.has(clientId)) unavailable();
+  if (clientId === "claude-code") await sleep(WATCH_STAGGER_MS);
+  for (;;) {
+    try { await launcher.sync(clientId); } catch { reportFailure(); }
+    // Admission occurs after variable container startup. Waiting after completion
+    // avoids a faster next startup reaching the durable gate prematurely. There
+    // are no catch-up requests or immediate retries after failure or suspension.
+    await sleep(WATCH_INTERVAL_MS);
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   let directory; let launcher;
   try {
@@ -345,13 +365,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => {
       void launcher.dispose().finally(() => { fs.rmSync(directory, { recursive: true, force: true }); process.exit(1); });
     });
-    if (command === "watch") {
-      if (clientId === "claude-code") await new Promise((resolve) => setTimeout(resolve, 61000));
-      for (;;) {
-        try { await launcher.sync(clientId); } catch { process.stderr.write("Restricted sync unavailable.\n"); }
-        await new Promise((resolve) => setTimeout(resolve, 3600000));
-      }
-    } else await launcher[command](clientId);
+    if (command === "watch") await watchClient(launcher, clientId);
+    else await launcher[command](clientId);
   } catch { process.stderr.write("Restricted launcher unavailable.\n"); process.exitCode = 1; }
   finally {
     if (launcher) await launcher.dispose();

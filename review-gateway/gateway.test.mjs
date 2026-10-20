@@ -49,11 +49,11 @@ test("untrusted errors become one constant; unsupported tools never reach upstre
   assert.deepEqual(denied, failed);
   assert.equal(JSON.stringify(failed).includes("secret"), false);
 });
-test("only 30 requests per hour; no overlapping upstream calls", async () => {
+test("only 70 requests per hour; no overlapping upstream calls", async () => {
   let requests = 0;
   const call = createGateway(options(async () => { requests++; return response(good()); }));
-  for (let i = 0; i < 31; i++) await call("get_health_summary", { date: day });
-  assert.equal(requests, 30);
+  for (let i = 0; i < 71; i++) await call("get_health_summary", { date: day });
+  assert.equal(requests, 70);
   let release;
   const waiting = createGateway(options(() => new Promise((resolve) => { release = resolve; })));
   const first = waiting("get_health_summary", { date: day });

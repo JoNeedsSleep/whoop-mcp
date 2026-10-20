@@ -15,7 +15,7 @@ async function fixture(t, options = {}) {
     auth: { handleAuth: async () => false, verifyBearer: async (value) =>
       value === token && (options.valid?.() ?? true) ? { clientId: "codex" } : null },
     store: { acquireToolCall: async () => {
-      if (active || acquired >= (options.limit ?? 30)) return null;
+      if (active || acquired >= (options.limit ?? 70)) return null;
       active = true; return ++acquired;
     }, releaseToolCall: async () => { active = false; released++; } },
     callTool: async (name, args) => {

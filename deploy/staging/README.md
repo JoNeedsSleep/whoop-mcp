@@ -237,7 +237,7 @@ attest that arbitrary software at that hostname returns honest data.
    the seven dates and known fixture values (today's recovery 74, HRV 52.5,
    resting heart rate 54, sleep 28200000ms, performance 91, strain 8.2). Use the pinned
    offline reader in each intended client and label every result as synthetic.
-   Confirm tool calls do not create remote requests; hourly admission and
+   Confirm tool calls do not create remote requests; 15-minute admission and
    90-minute cache bounds still apply.
 6. Revoke one staging grant through the owner page and verify the other remains
    valid. A rejected sync deletes that client's cache; already cached data can

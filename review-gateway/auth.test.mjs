@@ -280,7 +280,7 @@ test("durable global quota and single-flight lease survive new handles; failures
   const old = first.acquireToolCall(); assert(old); assert.equal(second.acquireToolCall(), null);
   time += 15000; const current = second.acquireToolCall(); assert(current); first.releaseToolCall(old);
   assert.equal(first.acquireToolCall(), null); second.releaseToolCall(current);
-  for (let i = 2; i < 30; i++) { const store = i % 2 ? first : second; const lease = store.acquireToolCall(); assert(lease); store.releaseToolCall(lease); }
+  for (let i = 2; i < 70; i++) { const store = i % 2 ? first : second; const lease = store.acquireToolCall(); assert(lease); store.releaseToolCall(lease); }
   assert.equal(first.acquireToolCall(), null); assert.equal(second.acquireToolCall(), null);
   time += 3600000; const lease = second.acquireToolCall(); assert(lease); second.releaseToolCall(lease);
 });

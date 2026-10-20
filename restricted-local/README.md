@@ -36,13 +36,28 @@ rate, sleep duration, sleep performance and strain. Numbers have bounded ranges
 and precision. No remote free text or error body is returned to the assistant.
 
 Sync is independent of the conversation. It makes one fixed HTTPS GET without
-query parameters, at most once per hour per client, and persists admission before
+query parameters, at most once every 15 minutes per client, and persists admission before
 networking. The gateway assembles seven dates using the existing summary grant
 (whose OAuth resource remains `/mcp`); each date consumes the shared gateway
 quota. It returns no partial snapshot. The local sync process rejects redirects,
 compression, malformed UTF-8/JSON, extra fields, wrong dates and oversized data.
 Its total response deadline is 40 seconds; each upstream summary has a five-second
 deadline. A midnight race can reject a snapshot until the next scheduled attempt.
+
+Two clients at four snapshots per hour need 56 daily-summary calls per hour.
+Both gateway gates use the same fixed 70-call rolling-hour ceiling, including
+14 calls of allowance for variable completion times at the window edge. Failed
+calls still count and only one upstream call may run at a time. This explicitly
+increases the allowed data-refresh rate fourfold; it adds no fields, dates or
+conversation-dependent network activity. The seven-day grants and 90-minute cache
+ceiling are unchanged. The cadence is prepared in source; real-data fetching and
+installed client activation are still separate pending steps.
+
+Release order matters: install the reviewed 70-call gateway package before
+starting the updated local launcher with its newly pinned sync image. Existing
+immutable gateway/sync images retain their old limits until explicitly replaced;
+editing source alone does not change them. Preserve quota/admission databases
+during the update rather than resetting their history.
 
 ## Sign-in and freshness
 
@@ -232,10 +247,14 @@ config-selected volumes and tagged identity:
 and refuses to overwrite existing data; `transport-init` does the same for the
 separate node/socket volumes. `login` prints the fixed gateway URL for
 you to open. Enter only the separate gateway owner secret there. `sync` updates
-the cache once; `watch` is a foreground hourly sync loop, stopped with Ctrl-C.
+the cache once; `watch` is a foreground loop that waits 15 minutes after each
+completed attempt, stopped with Ctrl-C. Startup and request time add to that
+interval. Missed intervals are not replayed and failures are not retried early.
 Run watches separately; Claude's watch delays its first attempt by 61 seconds
 to reduce contention with Codex. Manual simultaneous syncs can still collide
-with the gateway's shared single-flight limit and must wait for the next hour.
+with the gateway's shared single-flight limit and must wait for their next
+15-minute admission. The initial stagger reduces contention; it cannot guarantee
+that separately running watches never drift into each other.
 The resource review date in names/labels is metadata, not automatic deletion.
 
 The private browser sign-in must run from an independently authorized tailnet

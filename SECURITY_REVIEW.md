@@ -52,7 +52,7 @@ Pinned offline local MCP reader
         | read-only per-client cache, expires within 90 minutes
         v
 Separate isolated local sync/login process
-  seven-day gateway grant; fixed seven-day snapshot; hourly admission
+  seven-day gateway grant; fixed seven-day snapshot; 15-minute admission
         | end-to-end HTTPS through a read-only Unix relay socket
         v
 Dedicated per-client Tailscale transport container
@@ -70,13 +70,53 @@ The gateway must run in a separate security principal and isolated environment, 
 
 `review-gateway/gateway.mjs` is the dependency-free data adapter. It exposes one immutable tool definition, accepts a real UTC date, requests only `/internal/health-summary`, denies redirects, limits decoded responses to 4096 bytes, validates every field, rejects extra properties and text/URLs in data, and recreates the result. Numeric values are bounded and precision-limited. It never calls model APIs or forwards upstream tool metadata, sampling requests, resources, prompts, model outputs, errors or redirect advice.
 
-The independent gateway now implements Streamable HTTP MCP, its own OAuth authorization server, exact pre-registered Codex/Claude Code callbacks, browser-bound owner sign-in/consent, and durable SQLite authorization/rate-limit state. Client-to-gateway tokens are distinct from the gateway-to-service machine credential. A configured public client ID identifies a client registration, not attested application software. The gateway exposes only reviewed protocol methods and the fixed summary tool. Thirty tool calls per rolling hour and one in-flight upstream request are enforced across both clients and restarts using the same persistent database; run one replica with one local DB. Independent per-process DB copies do not enforce a common budget.
+The independent gateway now implements Streamable HTTP MCP, its own OAuth authorization server, exact pre-registered Codex/Claude Code callbacks, browser-bound owner sign-in/consent, and durable SQLite authorization/rate-limit state. Client-to-gateway tokens are distinct from the gateway-to-service machine credential. A configured public client ID identifies a client registration, not attested application software. The gateway exposes only reviewed protocol methods and the fixed summary tool. Seventy summary/tool calls per rolling hour and one in-flight upstream request are enforced across both clients and restarts using the same persistent database; run one replica with one local DB. Independent per-process DB copies do not enforce a common budget.
 
 The WHOOP service's legacy `/mcp` remains absent by default (`ENABLE_LEGACY_DIRECT_MCP=false`). Its summary endpoint now accepts only the dedicated machine credential and resolves the configured numeric WHOOP identity server-side. User PATs cannot call it. Missing machine-token hash disables the endpoint. Firewall WHOOP ingress so only the gateway reaches the summary endpoint, and protect its admin/OAuth interface separately. Runtime isolation, HTTPS ingress and actual client activation still need deployment verification; source-code implementation is not a deployed enforcement boundary.
 
 Schema validation blocks instruction-bearing strings and unapproved fields. It does **not** authenticate plausible numbers, dates or enum values: a compromised server can fabricate a normal-looking recovery score, encode information in valid metrics, omit records, or cause denial of service. The tests explicitly demonstrate acceptance of plausible falsified data. Clinical correctness and provenance need independent verification. No absolute security or impossibility of prompt injection, model misuse or distillation is claimed. Keeping model credentials and outputs away from the server, disallowing server-initiated model calls, and applying independently enforced quotas substantially limits opportunities; it cannot prove that all misuse is impossible.
 
 The gateway protections alone assume that gateway remains trusted. A compromised gateway can bypass its own schema, authentication and quotas, capture subsequent gateway login credentials and return malicious MCP responses. Direct remote MCP would pass those responses to the client. The implemented restricted local adapter removes that direct path: it fetches only a data snapshot, independently validates it, and serves locally constructed MCP messages from an offline reader. Neither client is configured to contact the remote MCP endpoint. This is source implementation, not a claim that installed client settings or deployment have been activated. It does not guarantee laptop safety against a vulnerable local parser/runtime/kernel, a compromised local release, or model misuse of plausible fabricated numbers.
+
+The owner approved a 15-minute data-sync cadence on 2026-10-19. Each client's
+durable local gate charges an attempt before networking; the watch waits 15
+minutes after that attempt finishes, including failures, with an initial
+61-second Claude offset. There are no automatic retries or catch-up bursts.
+Two clients need 56 summary calls/hour at that cadence. Both gateway quota gates
+now have a fixed 70-call ceiling, allowing 14 for variable timing at rolling-hour
+edges; one upstream call at a time and failure charging remain enforced. This
+raises the allowed data-refresh rate fourfold without expanding the seven-date
+numeric schema, seven-day login or 90-minute cache ceiling. It is source
+preparation, not evidence of activated real-data syncing. The separate hourly
+security receipt automation is unchanged.
+
+The cadence follow-up passed 137 focused gateway/local tests in a fresh pinned
+Node 22 container after all twelve isolation checks passed. The source inventory
+matched before and after execution, and exact-owned container cleanup passed.
+The first run's 136/137 result is retained: one TLS-negative test incorrectly
+assumed two sync intervals exceeded the unchanged 90-minute cache lifetime.
+The corrected test verifies unchanged cache bytes/deadline, continued access
+before the original expiry, and rejection exactly at that expiry. No production
+TLS, expiry or retry behavior was relaxed. Independent review also caught and
+corrected a proposed launcher timing calculation that could have hit durable
+admission too early after variable container startup.
+
+Only the affected sync and normal gateway packages were rebuilt offline from
+cached, pinned bases. Their packaged source hashes, twelve isolation checks each,
+startup smoke checks and exact-owned cleanup passed. The ARM64 sync image is
+`sha256:a073788cfd0e3ca81902527711c46ac239366bcc198cda3727c865ce0b7effbb`;
+the AMD64 normal gateway image is
+`sha256:def6cba0573ec64679df6d17c211d0fbbdcd361fb3381ee20ab0c2c7c73e620b`.
+The separately reviewed host launcher's SHA-256 is
+`eb25ac64c2205776a7b14b6ef5244a0550458c55a5cc737ad624116008336cc6`.
+An initial image-metadata check stopped before container creation because Docker
+omitted an empty `Cmd` field; the reviewed check now accepts only missing/null or
+an empty array for that ENTRYPOINT-only image. The exact entrypoint and all other
+controls stayed enforced. No running deployment, installed client pin or volume
+was changed. Existing immutable releases retain the old cadence/quota until
+explicit replacement; upgrade the gateway before starting the new local watches.
+AMD64 smoke checks used OrbStack translation, not a native Railway deployment;
+previously documented runtime advisories and activation gates remain open.
 
 ## Patch contents
 
@@ -191,7 +231,7 @@ The implemented gateway has no deployed enforcement boundary yet. Actual browser
 ## Restricted local adapter follow-up (2026-10-18)
 
 At the user's request, the threat model now includes a compromised remote gateway.
-The new `restricted-local/` code separates human login and hourly data sync from
+The new `restricted-local/` code separates human login and independently scheduled data sync from
 an offline stdio MCP reader. Both clients use their own reader/cache and seven-day
 gateway grant; neither reader receives a token or contacts remote MCP. The earlier
 legacy local extension is not an acceptable substitute.
@@ -208,8 +248,8 @@ fetch and before delivery. Failed collection returns no partial snapshot.
 Local OAuth uses fixed configured endpoints, state/S256/issuer/exact callbacks,
 a five-minute listener and five-second token exchange bound. No discovery or
 remote-selected endpoint is used. Token files are private, client/origin-bound
-and locally capped at the original seven-day deadline. Sync durably charges an
-hourly attempt before networking; rejects redirects, compression, oversized or
+and locally capped at the original seven-day deadline. Sync durably charges a
+15-minute attempt before networking; rejects redirects, compression, oversized or
 malformed bodies; and applies a 40-second overall deadline. Cache writes are
 atomic and private; reads reject unsafe file types/links, permissions, malformed
 UTF-8 and unknown fields. A cache expires within 90 minutes and never outlives its

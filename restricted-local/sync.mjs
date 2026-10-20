@@ -5,7 +5,7 @@ import { boundedJson, configuredFetch, parseLocalConfig, parseToken, privatePare
 import { validateSnapshot } from "./policy.mjs";
 import { CACHE_TTL_MS, writeCache } from "./cache.mjs";
 
-export const SYNC_INTERVAL_MS = 3600000;
+export const SYNC_INTERVAL_MS = 15 * 60000;
 // Seven gateway summaries execute sequentially, each with a five-second bound.
 export const SNAPSHOT_TIMEOUT_MS = 40000;
 export function acquireSyncAttempt(filename, now) {
@@ -56,7 +56,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     if (process.argv.length !== 3) throw new Error();
     const result = await syncOnce(readLocalConfig(process.argv[2]));
-    const messages = { updated: "Local snapshot updated.", limited: "Local sync is limited to once per hour.",
+    const messages = { updated: "Local snapshot updated.", limited: "Local sync is limited to once every 15 minutes.",
       reauthorize: "Gateway authorization expired or was revoked. Sign in again separately.", unavailable: "Local snapshot unavailable." };
     console.log(messages[result.status]); if (!["updated", "limited"].includes(result.status)) process.exitCode = 1;
   } catch { console.error("Local sync configuration unavailable."); process.exitCode = 1; }

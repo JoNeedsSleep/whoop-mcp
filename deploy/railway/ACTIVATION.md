@@ -35,12 +35,15 @@ Hobby has a $5 minimum including $5 of usage, rather than an additional $5 on to
 of usage above that amount. Volumes cost about $0.16 per GB per 30 days and service
 egress costs $0.05 per GB at these rates.
 
-Propose a **$25 compute usage hard limit per billing cycle**, with a $15 email
-alert, for the personal workspace. Compute usage here includes CPU, memory,
-storage and service egress. The workspace inventory currently shows only this
-WHOOP project. Reaching the hard limit stops all its workloads; it does not
-guarantee uninterrupted service. These values are prepared in the UI but have
-not been saved or approved. Existing agent limits are outside this change.
+The owner explicitly authorized the **$25 compute usage hard limit per billing
+cycle** on 2026-10-19. The personal workspace's Railway Usage page was then
+observed already showing that saved limit; the previous pending-status report
+was stale. The existing $15 email threshold and separate agent limits were left
+unchanged. Compute usage here includes CPU, memory, storage and service egress.
+The workspace inventory showed only this WHOOP project. Reaching the hard limit
+stops all its workloads; it does not guarantee uninterrupted service or cap
+separately billed subscriptions, agent usage or tax. This budget approval does
+not authorize the still-pending production resources, migrations or WHOOP consent.
 
 For initial activation, propose no paid backup schedule or historical health
 archive. WHOOP remains the source of health records. Losing the database would
@@ -148,8 +151,13 @@ activation step and has not yet been installed.
 The implemented data product is **seven recent UTC daily summaries**, with six
 bounded numeric metrics plus date/status. It is not an all-history import or a
 raw workout archive. Each gateway/client grant lasts a fixed seven days;
-activity does not extend it. An hourly sync and a 90-minute maximum cache age are
-separate controls. They must not be bypassed to make verification pass.
+activity does not extend it. The approved data-sync cadence is one attempt per
+client every 15 minutes; the watch waits 15 minutes after completion, so startup
+and request time add to that interval. The 90-minute maximum cache age remains
+a separate control. Neither limit may be bypassed to make verification pass.
+This is source preparation: real-backend deployment, real-data sync and installed
+client activation have not occurred. The hourly security-receipt schedule is
+independent and unchanged.
 The later health-data consent includes a separate WHOOP refresh grant: its
 upstream access can renew until the integration is disconnected or revoked,
 independently of the seven-day gateway login. See the [privacy notice](../../PRIVACY.md)

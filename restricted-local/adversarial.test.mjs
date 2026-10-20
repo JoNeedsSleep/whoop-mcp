@@ -186,13 +186,13 @@ test("malicious TLS snapshots, redirects, compression and errors cannot change p
     f.reply = (_req, res) => malicious(res);
     assert.deepEqual(await f.sync(), { status: "unavailable" }, `Malicious response ${index} must fail closed`);
     assert.deepEqual(fs.readFileSync(f.clients.codex.config.cacheFile), previous, "Invalid input must not replace or refresh prior cache");
-    assert.deepEqual(await f.sync(), { status: "limited" }, "A failed attempt still consumes its hourly admission");
+    assert.deepEqual(await f.sync(), { status: "limited" }, "A failed attempt still consumes its 15-minute admission");
   }
   assert.equal(f.requests.length, cases.length + 1); fixedRequests(f);
   unavailable(call(reader(f), "2026-10-18"));
 });
 
-test("both clients have durable hourly sync admission independent of offline MCP requests", { timeout: 15000 }, async (t) => {
+test("both clients have durable 15-minute sync admission independent of offline MCP requests", { timeout: 15000 }, async (t) => {
   const f = await fixture(t);
   assert.deepEqual(await Promise.all([f.sync("codex"), f.sync("claude-code")]), [{ status: "updated" }, { status: "updated" }]);
   for (const clientId of ["codex", "claude-code"]) {
@@ -255,11 +255,15 @@ test("actual HTTPS hostname and CA failures cannot populate or renew the local c
   const f = await fixture(t);
   assert.equal((await f.sync()).status, "updated");
   const previous = fs.readFileSync(f.clients.codex.config.cacheFile);
+  const originalExpiry = readCache(f.clients.codex.config.cacheFile, "codex", f.time).expiresAt;
   f.time += SYNC_INTERVAL_MS;
   assert.deepEqual(await f.sync("codex", trustedFetch(certificates().ca, "wrong.example")), { status: "unavailable" });
   f.time += SYNC_INTERVAL_MS;
   assert.deepEqual(await f.sync("codex", trustedFetch(undefined)), { status: "unavailable" });
   assert.deepEqual(fs.readFileSync(f.clients.codex.config.cacheFile), previous);
   assert.equal(f.requests.length, 1, "TLS-rejected connections must not send an HTTP request");
+  assert.equal(readCache(f.clients.codex.config.cacheFile, "codex", f.time).expiresAt, originalExpiry);
+  assert.equal(call(reader(f), "2026-10-18").result.structuredContent.recovery_score, 71);
+  f.time = originalExpiry;
   unavailable(call(reader(f), "2026-10-18"));
 });
