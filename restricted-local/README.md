@@ -303,6 +303,60 @@ client's MCP login action. Syntax follows the official
 and [Claude Code stdio configuration](https://code.claude.com/docs/en/mcp).
 Actual installed-client and deployed-ingress checks remain pending.
 
+### Bridge for the existing personal cache volumes
+
+`reader-launch.mjs` prepares a persistent stdio connection to the two cache
+volumes already used in the private staging checks. The earlier staging
+operator's `read` command sends a fixed smoke-test conversation and exits; it
+must not be installed as a persistent MCP server.
+
+This separate bridge accepts only `codex` or `claude-code`. It pins the reviewed
+reader image and exact existing cache names and provenance labels. It has no
+configuration-file, authorization-volume, login, sync, transport, enrollment or
+volume-management path. The cache is mounted read-only into an offline reader.
+The host wrapper inspects the container before and after startup and runs the
+kernel preflight before forwarding stdin/stdout. Application and Docker stderr
+are discarded; failures use one fixed message.
+
+Each reader container exits after a fixed 24 hours and requests Docker automatic
+removal. Normal EOF, cancellation and errors also trigger immediate cleanup of
+its exact owned container. The timer starts with container PID1 and bounds a
+running container left after an uncatchable host-process kill, provided execution
+is not paused and Docker and the kernel continue functioning. A kill between
+creation and startup can leave a stopped container object with no application
+running; it has no autonomous expiry. The timer also ends healthy connections;
+native-client reconnection has not been verified. Named cache volumes are
+preserved, and their separate 90-minute data-expiry check remains unchanged.
+
+Start the host wrapper through `/usr/bin/env -i` to remove inherited Node
+options and environment credentials before Node starts. Use the independently
+reviewed absolute host Node executable; the application reader itself always
+runs in its pinned Node 22 container. A client's configuration contains only the
+host executable, this reviewed source path and its fixed client name:
+
+```toml
+[mcp_servers.whoop_local]
+command = "/usr/bin/env"
+args = ["-i", "/absolute/reviewed/node", "/absolute/restricted-local/reader-launch.mjs", "codex"]
+enabled_tools = ["get_health_summary"]
+startup_timeout_sec = 30
+```
+
+```sh
+claude mcp add --transport stdio --scope local whoop-local -- /usr/bin/env -i /absolute/reviewed/node /absolute/restricted-local/reader-launch.mjs claude-code
+```
+
+These commands are installation examples, not evidence that either native
+client is configured. Use a dedicated health workspace and verify both native
+connections before claiming activation. Neither command performs login or sync.
+
+The bridge passed 13 focused tests in a verified offline Node 22 container,
+including actual reader subprocess stdio/EOF/cancellation, the kernel preflight
+and a shortened-literal timer test. All twelve isolation checks, five source
+hashes before and after execution, and exact test-container cleanup passed.
+Docker auto-removal was simulated; no native client, live cache or 24-hour
+wall-clock run was exercised.
+
 ## Limits
 
 A compromised gateway can steal gateway credentials submitted to it, leak WHOOP

@@ -25,6 +25,12 @@ WHOOP sign-in page. The user confirmed that they signed in without clicking an
 authorization button. A fresh verifier was opened afterward, but successful
 authorization, owner confirmation and temporary-grant revocation have not been
 observed. That five-minute verifier has expired; no owner ID was accepted.
+The subsequent verifier deployment `36679510` became ready at 05:34:10 UTC on
+2026-10-20 and returned its fixed unavailable status at 05:39:10 UTC. The browser
+was still at the official sign-in page, without an observed authorization or
+account confirmation. That expired deployment was removed and its persistent
+volume preserved. A fresh owner-present flow remains required; do not reuse
+the expired authorization link or infer a confirmed ID from successful sign-in.
 
 The first PostgreSQL initializer refused the provider's empty `lost+found`
 directory. A separate reviewed read-only inspector confirmed that it was the
