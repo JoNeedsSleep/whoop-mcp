@@ -24,7 +24,7 @@ The dedicated pool has one connection and closes after every result. A PostgreSQ
 
 After successful verification, revoke the schema owner's temporary database CREATE privilege, revoke or disable the temporary login, and remove its secret/config. Grant the separate runtime role only the six application tables' required CRUD operations, schema USAGE, and database CONNECT; do not grant it schema creation, table ownership, or migration-ledger writes. Migration 0002 invalidates earlier credentials. Reusing a populated database needs a separate backup and token-invalidation review; this utility is not approval for that change.
 
-The artifact-only Docker recipe consumes an independently prepared `migration-artifact` containing the reviewed locked `pg`/`drizzle-orm` dependency closure and exact `drizzle` files. It neither installs dependencies nor copies backend application assets. Packaging and deployment remain separate operator steps. The source tests cover guards, TLS, migration idempotence, a competing run, transaction rollback, deadline cleanup, and ledger rejection using only an isolated disposable database; record the actual execution result with the artifact before activation.
+The artifact-only Docker recipe consumes an independently prepared `migration-dependencies.tar` containing the reviewed locked `pg`/`drizzle-orm` dependency closure, plus `migration-artifact/drizzle` containing the exact migration files. It neither installs dependencies nor copies backend application assets. Packaging and deployment remain separate operator steps. The source tests cover guards, TLS, migration idempotence, a competing run, transaction rollback, deadline cleanup, and ledger rejection using only an isolated disposable database; record the actual execution result with the artifact before activation.
 
 On 2026-10-19, all 15 tests passed (8 unit, 7 disposable PostgreSQL integration), with zero failures or skips, using pinned Node 22.23.3 and PostgreSQL 17.11 containers. Twelve isolation checks passed before source execution; the run had no external network, host mounts, forwarded credentials, or SSH agent. PostgreSQL used synthetic TLS certificates and SCRAM credentials on the shared container loopback. Source hashes and removal of all three owned containers were verified. Earlier fixture failures were retained, including the per-database CREATE requirement and safe teardown correction. This verifies the tested source and synthetic database path; no real database migration has been performed.
 
@@ -39,3 +39,21 @@ Its actual entrypoint passed missing-config refusal, real dependency imports,
 hostile Node/OpenSSL environment stripping and malformed synthetic bootstrap
 refusal. Source hashes, 12 test-isolation controls and exact cleanup passed.
 These images remain undeployed and no real migration has run.
+
+On 2026-10-20, two Railway builds failed because the pinned CLI 5.68.0 excludes
+every `node_modules` path, including with `--no-gitignore`. The current recipe
+uses a validated local dependency tar and fixed Docker `ADD` destination to
+preserve the original dependency bytes through upload. It performs no package
+installation or network fetch. All 2,801 runtime files retained their bytes
+and modes; the 2,792 dependency files are merely packaged inside the archive.
+The fresh offline image check passed twelve isolation controls, actual
+`pg`/Drizzle imports, four startup guards and exact cleanup.
+
+The resulting AMD64 image is
+`sha256:4a71429d3e4f24482ee65608fb0556d63bde9df3f7f509904278e398bfb58d00`;
+its 13,096,960-byte context SHA256 is
+`e6486cee563796d6dc78c5fce80d575bbd0276c59a4ed2ab47f4993459a97116`.
+Evidence is retained in
+`migration-upload-tar-20261020a/attempt-20261020T051334-2d4f7ce4`.
+This is packaging validation under OrbStack AMD64 translation. It did not
+repeat the database integration suite or perform a real migration.

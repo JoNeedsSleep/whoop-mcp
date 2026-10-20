@@ -10,3 +10,5 @@
 !deploy/postgres/00-provision.sql
 !deploy/postgres/10-enable-migration.sql
 !deploy/postgres/20-finalize.sql
+!deploy/postgres/listen-addresses.mjs
+!deploy/postgres/normal-entrypoint.sh

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { guardInvocation, parseEnvelope, parseState, validateTls } from './provision.mjs';
+import { guardInvocation, parseEnvelope, parseState, validateTls, validateVolumeRoot } from './provision.mjs';
 
 const identity = (uid = 999) => ({ getuid: () => uid, getgid: () => uid, geteuid: () => uid, getegid: () => uid });
 const environment = { PATH: '/usr/local/bin:/usr/lib/postgresql/17/bin:/usr/bin:/bin', HOME: '/tmp', TMPDIR: '/tmp', LANG: 'C' };
@@ -11,6 +11,89 @@ const fixture = () => ({ version: 1, host: 'whoop-db.railway.internal',
   caCertificate: fs.readFileSync(tlsDir + '/ca.pem', 'utf8'),
   serverCertificate: fs.readFileSync(tlsDir + '/server.pem', 'utf8'), serverKey: fs.readFileSync(tlsDir + '/server-key.pem', 'utf8'),
   runtimePassword: 'a'.repeat(64), migrationPassword: 'b'.repeat(64) });
+const volumeRoot = '/var/lib/postgresql/data';
+const preparedNames = ['pgdata', 'config', 'tls', 'run', 'provision-state.json'];
+function volumeFixture({ phase = 'init', names = ['lost+found'], root = {}, lost = {}, opened = {}, after = {}, children = [] } = {}) {
+  const stat = (owner, mode, extra = {}) => ({ uid: owner, gid: owner, mode, dev: 1, ino: 2,
+    isDirectory: () => true, isSymbolicLink: () => false, ...extra });
+  const rootStat = stat(phase === 'init' ? 0 : 999, phase === 'init' ? 0o755 : 0o700, root);
+  const lostStat = stat(0, 0o700, lost); const calls = []; let lostReads = 0;
+  return { calls, filesystem: {
+    lstatSync(filename) {
+      calls.push(['lstat', filename]);
+      if (filename === volumeRoot) return rootStat;
+      assert.equal(filename, volumeRoot + '/lost+found');
+      return ++lostReads === 1 ? lostStat : { ...lostStat, ...after };
+    },
+    readdirSync(filename) {
+      calls.push(['readdir', filename]);
+      if (filename === volumeRoot) return [...names];
+      assert.equal(filename, '/proc/self/fd/42'); return [...children];
+    },
+    openSync(filename, flags) {
+      calls.push(['open', filename]); assert.equal(filename, volumeRoot + '/lost+found');
+      assert.equal(flags, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW); return 42;
+    },
+    fstatSync(fd) { calls.push(['fstat', fd]); assert.equal(fd, 42); return { ...lostStat, ...opened }; },
+    closeSync(fd) { calls.push(['close', fd]); assert.equal(fd, 42); },
+  } };
+}
+
+test('root init allows only an empty volume or exact protected empty lost+found', () => {
+  for (const names of [[], ['lost+found']]) for (const mode of [0o700, 0o755]) {
+    const fixture = volumeFixture({ names, root: { mode } });
+    validateVolumeRoot('init', fixture);
+    assert.equal(fixture.calls.filter(([call]) => call === 'open').length, names.length);
+    assert.equal(fixture.calls.filter(([call]) => call === 'close').length, names.length);
+  }
+  for (const names of [['other'], ['lost+found', 'other'], ['pgdata'], ['lost+found', '.provision.lock'],
+    ['lost+found', ...preparedNames]]) {
+    const fixture = volumeFixture({ names });
+    assert.throws(() => validateVolumeRoot('init', fixture), failure);
+    assert.equal(fixture.calls.some(([call]) => call === 'open'), false);
+  }
+});
+test('unsafe root or lost+found metadata is refused before opening or any writes', () => {
+  for (const field of ['root', 'lost']) {
+    const invalid = [{ uid: 999 }, { gid: 999 }, { isDirectory: () => false }, { isSymbolicLink: () => true },
+      { mode: 0o777 }, { mode: 0o1700 }, { mode: 0o2700 }, { mode: 0o4700 }];
+    if (field === 'lost') invalid.push({ mode: 0o755 }, { mode: 0o750 });
+    for (const metadata of invalid) {
+      const fixture = volumeFixture({ [field]: metadata });
+      assert.throws(() => validateVolumeRoot('init', fixture), failure);
+      assert.equal(fixture.calls.some(([call]) => call === 'open'), false);
+    }
+  }
+});
+test('nonempty and replaced lost+found fail and close the nofollow directory descriptor', () => {
+  for (const options of [{ children: ['recovered-file'] }, { opened: { ino: 3 } }, { opened: { dev: 3 } },
+    { opened: { uid: 999 } }, { after: { ino: 3 } }, { after: { mode: 0o755 } }]) {
+    const fixture = volumeFixture(options);
+    assert.throws(() => validateVolumeRoot('init', fixture), failure);
+    assert.equal(fixture.calls.filter(([call]) => call === 'close').length, 1);
+  }
+});
+test('all later phases retain exact root entries and inspect only protected lost+found metadata', () => {
+  for (const phase of ['configure', 'enable', 'finalize']) {
+    for (const names of [preparedNames, [...preparedNames, 'lost+found']]) {
+      const fixture = volumeFixture({ phase, names, children: ['cannot-be-read-by-uid999'] });
+      validateVolumeRoot(phase, fixture);
+      assert.equal(fixture.calls.some(([call]) => call === 'open'), false);
+      assert.deepEqual(fixture.calls.filter(([call]) => call === 'readdir'), [['readdir', volumeRoot]]);
+    }
+    for (const options of [{ names: [...preparedNames, 'lost+found', 'other'] }, { names: ['lost+found'] },
+      { root: { uid: 0 } }, { root: { mode: 0o755 } }, { lost: { uid: 999 } }, { lost: { gid: 999 } },
+      { lost: { mode: 0o755 } }, { lost: { isSymbolicLink: () => true } }, { lost: { isDirectory: () => false } }]) {
+      const fixture = volumeFixture({ phase, names: [...preparedNames, 'lost+found'], ...options });
+      assert.throws(() => validateVolumeRoot(phase, fixture), failure);
+      assert.equal(fixture.calls.some(([call]) => call === 'open'), false);
+    }
+  }
+});
+test('volume validation exposes only fixed errors and no alternate phase', () => {
+  assert.throws(() => validateVolumeRoot('unknown', { filesystem: new Proxy({}, { get() { assert.fail('filesystem read'); } }) }), failure);
+  assert.throws(() => validateVolumeRoot('init', { filesystem: { lstatSync() { throw new Error('private filesystem details'); } } }), failure);
+});
 
 test('identity and kernel checks precede any environment value access', () => {
   const env = Object.defineProperty({}, 'SECRET', { enumerable: true, get() { assert.fail('read secret'); } });

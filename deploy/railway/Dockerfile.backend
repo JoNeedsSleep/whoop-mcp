@@ -10,7 +10,7 @@ COPY deploy/railway/config.mjs deploy/railway/tailscale-supervisor.mjs deploy/ra
 COPY deploy/railway/backend-runtime.mjs /app/deploy/railway/
 COPY deploy/staging/runtime-check.mjs /app/deploy/staging/
 COPY backend-artifact/package.json ./
-COPY backend-artifact/node_modules ./node_modules
+ADD backend-dependencies.tar /app/backend/node_modules/
 COPY backend-artifact/dist ./dist
 COPY backend-artifact/web/dist ./web/dist
 COPY backend-artifact/drizzle ./drizzle

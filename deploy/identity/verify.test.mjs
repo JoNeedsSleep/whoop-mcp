@@ -14,6 +14,7 @@ const token = { access_token: 'synthetic-access-token', token_type: 'bearer', sc
 const profile = { user_id: 1234567, first_name: '<Owner>', last_name: 'Account', email: 'owner@example.test' };
 const failure = { message: 'IDENTITY_UNAVAILABLE' };
 const csrf = text => text.match(/name="csrf" value="([A-Za-z0-9_-]{43})"/)?.[1];
+const authorizationLink = text => text.match(/<a href="([^"]+)" rel="noreferrer">Open WHOOP sign-in<\/a>/)?.[1].replaceAll('&amp;', '&');
 function call(server, path, { method = 'GET', cookie, body, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port: server.address().port, path, method,
@@ -38,16 +39,74 @@ async function begin(service) {
   assert.match(page.headers['set-cookie'][0], /Secure; HttpOnly; SameSite=Lax/);
   assert.equal(page.headers['cache-control'], 'no-store'); assert.equal(page.headers['referrer-policy'], 'strict-origin');
   const redirect = await call(service.server, '/start', { method: 'POST', cookie, body: new URLSearchParams({ csrf: csrf(page.text) }).toString() });
-  assert.equal(redirect.status, 303); const url = new URL(redirect.headers.location);
+  assert.equal(redirect.status, 303); assert.equal(redirect.headers.location, '/authorize');
+  const navigation = await call(service.server, '/authorize', { cookie });
+  assert.equal(navigation.status, 200); const url = new URL(authorizationLink(navigation.text));
   assert.equal(url.origin, 'https://api.prod.whoop.com'); assert.equal(url.pathname, '/oauth/oauth2/auth');
   assert.equal(url.searchParams.get('scope'), 'read:profile'); assert.equal(url.searchParams.get('redirect_uri'), origin + '/whoop/callback');
   assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
-  return { cookie, callback: '/whoop/callback?' + new URLSearchParams({ code: 'synthetic-code', state: url.searchParams.get('state') }), page, redirect };
+  return { cookie, callback: '/whoop/callback?' + new URLSearchParams({ code: 'synthetic-code', state: url.searchParams.get('state') }), page, redirect, navigation, url };
 }
 
 test('exact identity-only config rejects generic services, destinations and extra secrets', () => {
   assert.deepEqual(parseIdentityConfig(config), config);
   for (const raw of [{ ...config, mode: 'backend' }, { ...config, hostname: 'public.example' }, { ...config, databaseUrl: 'secret' }, { ...config, clientSecret: '' }]) assert.throws(() => parseIdentityConfig(raw), failure);
+});
+
+test('start ends on the private origin before an explicit fixed WHOOP link with no form redirect chain', async t => {
+  const f = await fixture(t); const flow = await begin(f);
+  for (const page of [flow.page, flow.navigation]) {
+    assert.equal(page.headers['content-security-policy'], "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    assert.equal(page.headers['cache-control'], 'no-store');
+  }
+  assert.equal(flow.redirect.headers['referrer-policy'], 'no-referrer');
+  assert.equal(flow.navigation.headers.location, undefined);
+  assert.equal(flow.navigation.headers.refresh, undefined);
+  assert.doesNotMatch(flow.navigation.text, /<form|<script|http-equiv|synthetic-client-secret|synthetic-access-token/);
+  assert.equal((flow.navigation.text.match(/<a /g) ?? []).length, 1);
+  assert.match(flow.navigation.text, /&amp;redirect_uri=/);
+  assert.deepEqual([...flow.url.searchParams.keys()].sort(), ['client_id', 'code_challenge', 'code_challenge_method', 'redirect_uri', 'response_type', 'scope', 'state']);
+  assert.equal(flow.url.searchParams.get('client_id'), config.clientId);
+  assert.equal(flow.url.searchParams.get('response_type'), 'code');
+  assert.match(flow.url.searchParams.get('state'), /^[A-Za-z0-9_-]{43}$/);
+  assert.match(flow.url.searchParams.get('code_challenge'), /^[A-Za-z0-9_-]{43}$/);
+  assert.deepEqual(f.calls, []);
+});
+
+test('authorization link requires valid start, exact browser and original expiry; refresh does not rotate state', async t => {
+  let time = 1000000; const f = await fixture(t, { now: () => time });
+  assert.equal((await call(f.server, '/authorize')).status, 400);
+  const flow = await begin(f);
+  for (const options of [{}, { cookie: '__Host-whoop_identity=other' }, { cookie: flow.cookie, headers: { Origin: 'null' } }]) {
+    assert.equal((await call(f.server, '/authorize', options)).status, 400);
+  }
+  for (const path of ['/authorize?next=https://evil.example', '/authorize/']) {
+    assert.equal((await call(f.server, path, { cookie: flow.cookie })).status, 400);
+  }
+  const retry = await call(f.server, '/authorize', { cookie: flow.cookie });
+  assert.equal(retry.status, 200); assert.equal(authorizationLink(retry.text), flow.url.href);
+  assert.equal((await call(f.server, '/start', { method: 'POST', cookie: flow.cookie, body: new URLSearchParams({ csrf: csrf(flow.page.text) }).toString() })).status, 400);
+  time += 300000;
+  const expired = await call(f.server, '/authorize', { cookie: flow.cookie });
+  assert.equal(expired.status, 400); assert.equal(authorizationLink(expired.text), undefined); assert.deepEqual(f.calls, []);
+});
+
+test('authorization page remains inaccessible after rejected start and consumed callback', async t => {
+  const f = await fixture(t); const page = await call(f.server, '/');
+  const cookie = page.headers['set-cookie'][0].split(';')[0];
+  for (const headers of [{ Origin: 'null' }, { Origin: 'https://evil.example' }, { Origin: '' }]) {
+    assert.equal((await call(f.server, '/start', { method: 'POST', cookie, body: new URLSearchParams({ csrf: csrf(page.text) }).toString(), headers })).status, 400);
+    assert.equal((await call(f.server, '/authorize', { cookie })).status, 400);
+  }
+  assert.equal((await call(f.server, '/start', { method: 'POST', cookie, body: 'csrf=wrong' })).status, 400);
+  assert.equal((await call(f.server, '/authorize', { cookie })).status, 400);
+  const started = await call(f.server, '/start', { method: 'POST', cookie, body: new URLSearchParams({ csrf: csrf(page.text) }).toString() });
+  assert.equal(started.headers.location, '/authorize');
+  const link = new URL(authorizationLink((await call(f.server, '/authorize', { cookie })).text));
+  const callback = '/whoop/callback?' + new URLSearchParams({ code: 'synthetic-code', state: link.searchParams.get('state') });
+  assert.equal((await call(f.server, callback, { cookie })).status, 303);
+  assert.equal((await call(f.server, '/authorize', { cookie })).status, 400);
+  assert.deepEqual(f.calls.map(v => v.kind), ['token', 'profile']);
 });
 
 test('one browser completes profile-only flow, confirms escaped account, then sees ID only after revoke', async t => {

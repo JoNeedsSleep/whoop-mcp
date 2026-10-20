@@ -1,0 +1,7 @@
+**
+!Dockerfile
+!.dockerignore
+!deploy/
+!deploy/postgres/
+!deploy/postgres/inspect-volume.mjs
+!deploy/postgres/inspect-entrypoint.sh

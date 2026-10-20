@@ -79,7 +79,7 @@ function response(res, status, body, { html = false, location, cookie } = {}) {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('Pragma', 'no-cache');
   res.setHeader('Referrer-Policy', html ? 'strict-origin' : 'no-referrer');
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Content-Security-Policy', "default-src 'none'; form-action 'self' https://api.prod.whoop.com; frame-ancestors 'none'; base-uri 'none'");
+  res.setHeader('Content-Security-Policy', "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   if (cookie !== undefined) res.setHeader('Set-Cookie', `${COOKIE}=${cookie}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${cookie ? 300 : 0}`);
   if (location) res.setHeader('Location', location);
   res.writeHead(status, { 'Content-Type': html ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8', Connection: 'close' });
@@ -133,10 +133,15 @@ export function createIdentityServer(raw, { upstream = requestWhoop, now = Date.
       if (req.method === 'POST' && req.url === '/start' && phase === 'intro') {
         const values = await form(req); if (!live() || phase !== 'intro' || !equal(values.csrf, csrf) || Object.keys(values).length !== 1) unavailable();
         phase = 'authorizing';
+        // End the form navigation on this origin. A separate, explicit link
+        // avoids applying our form-action policy to WHOOP's login redirects.
+        response(res, 303, '', { location: '/authorize' }); return;
+      }
+      if (req.method === 'GET' && req.url === '/authorize' && phase === 'authorizing') {
         const url = new URL(`https://${HOST}/oauth/oauth2/auth`);
         url.search = new URLSearchParams({ response_type: 'code', client_id: config.clientId, redirect_uri: redirectUri,
           scope: 'read:profile', state, code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' }).toString();
-        response(res, 303, '', { location: url.href }); return;
+        response(res, 200, `<h1>Continue on WHOOP</h1><p>The next page is WHOOP's sign-in and consent page. This check requests only your account profile, without health data or offline access.</p><p><a href="${escape(url.href)}" rel="noreferrer">Open WHOOP sign-in</a></p>`, { html: true }); return;
       }
       if (req.method === 'GET' && url.pathname === '/whoop/callback' && phase === 'authorizing') {
         const values = parameters(url.searchParams, ['state', 'code', 'error']);

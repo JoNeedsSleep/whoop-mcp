@@ -48,12 +48,40 @@ these previously built artifacts:
 
 ```text
 backend-artifact/package.json
-backend-artifact/node_modules/   # reviewed production dependencies
+backend-dependencies.tar        # exact reviewed production dependency tree
 backend-artifact/dist/           # compiled server
 backend-artifact/web/dist/       # compiled dashboard
 backend-artifact/drizzle/        # migration files, not executed by startup
-deploy/railway/{config,tailscale-supervisor,runtime}.mjs
+deploy/railway/{config,tailscale-supervisor,runtime,backend-runtime}.mjs
+deploy/staging/runtime-check.mjs
 ```
+
+The pinned Railway CLI 5.68.0 uploader excludes paths containing `node_modules`,
+including with `--no-gitignore`; that flag did not repair the observed uploads.
+See its [versioned upload implementation](https://github.com/railwayapp/cli/blob/v5.68.0/src/controllers/upload.rs).
+The reviewed packager therefore puts the already installed dependency tree in
+the local `backend-dependencies.tar`; Docker's fixed `ADD` extracts it at
+`/app/backend/node_modules/`. The migration and database-probe recipes use their
+own fixed local archives the same way. These are hash-verified public build
+inputs, not remote archive URLs. No dependency is installed, updated or fetched
+by this repackaging. Preserve the exact tested archive inventory, ownership,
+modes and two contained backend symlinks; never substitute an arbitrary tar.
+
+The backend repackaging passed offline validation against the original tested
+image: all 7,562 expected entries, including 6,805 files/symlinks, matched before
+and after the synthetic startup check. Directory modes were measured from that
+original image because Docker-created COPY destination directories differ from
+source-tar directory modes. Both containers passed twelve isolation checks;
+loopback-only synthetic health, no database connection, disabled direct MCP,
+missing-config rejection and exact cleanup passed. The two earlier failed
+metadata-check attempts remain recorded. Evidence:
+`backend-upload-tar-20261020a/attempt-20261020T052307-c2027386`.
+The resulting AMD64 image is
+`sha256:27d68463c83c35729ea38561d919a59efddc21747f903944ede828d872fe978e`;
+its public context SHA256 is
+`b87e87bb3caa8dbc11e9a97023be1728257d85ff65c788a8d517b445e6b4fb41`.
+This validates packaging under translated AMD64, not live backend readiness,
+database access or remediation of the documented runtime advisories.
 
 Use the repository-shaped context root and the Dockerfile-specific allowlist:
 

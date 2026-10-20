@@ -1,0 +1,8 @@
+# Temporary read-only metadata observer. No credentials or PostgreSQL execution.
+FROM node@sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562 AS node
+FROM postgres@sha256:66aafa11cf15800a3c94763f7e11d1e7b2e37e5e84bc4ce027cb6e1e4bfaf4df
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY deploy/postgres/inspect-volume.mjs deploy/postgres/inspect-entrypoint.sh /opt/whoop-postgres/
+USER 0:0
+ENTRYPOINT ["/usr/bin/setpriv", "--no-new-privs", "--", "/bin/sh", "/opt/whoop-postgres/inspect-entrypoint.sh"]
+CMD []

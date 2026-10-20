@@ -11,5 +11,5 @@
 !deploy/staging/
 !deploy/staging/runtime-check.mjs
 !migration-artifact/
-!migration-artifact/node_modules/**
+!migration-dependencies.tar
 !migration-artifact/drizzle/**

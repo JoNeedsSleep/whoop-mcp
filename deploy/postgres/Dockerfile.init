@@ -1,0 +1,10 @@
+# Secret-free initializer only; fixed phase, permanent drop to UID/GID999.
+FROM node@sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562 AS node
+FROM postgres@sha256:66aafa11cf15800a3c94763f7e11d1e7b2e37e5e84bc4ce027cb6e1e4bfaf4df
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY deploy/postgres/postgresql.conf.template deploy/postgres/pg_hba.conf deploy/postgres/pg_ident.conf /opt/whoop-postgres/
+COPY deploy/postgres/00-provision.sql deploy/postgres/10-enable-migration.sql deploy/postgres/20-finalize.sql /opt/whoop-postgres/
+COPY deploy/postgres/provision.mjs deploy/postgres/provision-entrypoint.sh /opt/whoop-postgres/
+USER 0:0
+ENTRYPOINT ["/usr/bin/setpriv", "--no-new-privs", "--", "/bin/sh", "/opt/whoop-postgres/provision-entrypoint.sh", "init"]
+CMD []

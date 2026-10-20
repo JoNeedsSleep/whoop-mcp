@@ -2,23 +2,129 @@
 
 Prepared 2026-10-19. This is a reviewable plan, not evidence of deployment or
 permission to perform its remaining account, billing or database actions.
-The existing Railway deployment still uses synthetic data. Keep the PR draft.
+The gateway still uses synthetic data. Keep the PR draft.
+
+The owner subsequently approved the production-scoped temporary operator,
+private backend/database resources, the three fresh-database migrations and a
+single-use personal Tailscale enrollment key. The two private services and their
+volumes now exist with the approved compute limits. Backend node enrollment
+succeeded; its enrollment key is invalidated and its active bootstrap variable
+was removed. Database-only credentials have now been delivered through the
+reviewed non-root provisioning phase. The three migrations have not run; no
+confirmed numeric WHOOP owner ID or health-data grant has been obtained.
+
+The separately approved browser/gateway-to-backend HTTPS rule was saved and
+verified after reloading the policy, with eleven policy tests. The private
+hostname resolves and the browser reaches the temporary identity page over
+HTTPS. An earlier save failed a test that confused a gateway tag with the
+approved exact device address; only that test was corrected, without broadening
+the grant. The initial identity form redirect stalled before WHOOP consent.
+After a reviewed change to an explicit sign-in link, 26 isolated tests and
+packaged-image checks passed; the updated private helper reached the official
+WHOOP sign-in page. The user confirmed that they signed in without clicking an
+authorization button. A fresh verifier was opened afterward, but successful
+authorization, owner confirmation and temporary-grant revocation have not been
+observed. That five-minute verifier has expired; no owner ID was accepted.
+
+The first PostgreSQL initializer refused the provider's empty `lost+found`
+directory. A separate reviewed read-only inspector confirmed that it was the
+only entry, owned by root, mode0700 and empty; PostgreSQL directories, state and
+lock files were absent. This is evidence of the observed failed attempt, not
+successful initialization or permission to overwrite any later content. The
+strict provider-layout compatibility fix subsequently passed isolated validation.
+
+At the live checkpoint on 2026-10-19 (CDT), the database phases were:
+
+- Root initializer `dcc93d0b` emitted its fixed success marker at 21:21:48,
+  then was removed.
+- Non-root fence `bdfc24f1` reached its guarded state, then was removed.
+  Database-only bootstrap delivery occurred after this fence.
+- Configure deployment `651bbc96` completed at 21:27:03, then was removed.
+  The active `WHOOP_POSTGRES_PROVISION` variable was deleted, and the Railway
+  UI showed **No Environment Variables**.
+- Enable deployment `4ecc9bfb` completed, then was removed. The temporary
+  migration login was enabled with its one-hour validity limit.
+- The normal PostgreSQL upload was accepted, but deployment `6306abf7` finished
+  as **COMPLETED**, not running. At 02:38:24.413 GMT on 2026-10-20 it reported
+  `could not create any TCP/IP sockets`. No listener or TLS check passed, and
+  the three migrations and subsequent finalization/revocation checks had not run.
+- Temporary diagnostic deployment `28dd95a1`, with only
+  `log_min_messages=log` changed, also completed without running. At
+  02:43:54.826 GMT it reported `Cannot assign requested address` for both
+  DNS-resolved address families. The listener, TLS and HBA configuration were
+  unchanged. This establishes the bind failure, but not which local interfaces
+  should be selected. The diagnostic was removed and its command override
+  cleared. Clearing it caused Railway's automatic normal-command relaunch,
+  which also stopped; this did not establish readiness.
+- A separately reviewed metadata-only diagnostic, deployment `93d2c179`, found
+  exactly loopback and `railnet0` interfaces. The latter had private IPv4 and
+  ULA IPv6 addresses plus an IPv6 link-local address. Neither service-DNS
+  address matched a local interface address. The diagnostic completed and was
+  removed. The reviewed runtime fix selects only `railnet0`'s private IPv4 and
+  ULA IPv6 addresses; no wildcard listener was enabled.
+- The corrected normal deployment `69f10600` was observed **Active/Online** on
+  2026-10-20 and accepted the credential-free TCP probes described below.
+  It was subsequently removed before the separate migration-window inspection.
+  This establishes a working listener at that checkpoint, not database TLS,
+  authentication or migration readiness.
+- The one-hour migration password-validity deadline elapsed before any
+  migrations ran. Expiration prevents password authentication; it does not
+  itself revoke LOGIN, role membership or database CREATE. Renewal and final
+  revocation remain explicit setup steps. No renewal has been executed and
+  the database is not ready.
+- Inspection deployment `2ff863bb` verified the expected empty schemas and
+  migration-role state, then shut down its local PostgreSQL process before
+  reporting the existing deadline `2026-10-20T03:34:11.923887Z` at
+  `2026-10-20T05:23:55.803633Z`. The inspection deployment was removed.
+  Automatic approval review rejected the subsequent one-hour renewal request
+  because the earlier migration approval did not clearly authorize extending
+  this expired credential. No renewal command executed. A specific owner
+  approval is pending; the reviewed command accepts only that inspected old
+  deadline and cannot renew twice. The database remains stopped meanwhile.
+
+The fixed credential-free network probe passed source review and nine isolated
+tests with all twelve isolation checks. Production deployment `6cf3cee3`
+recorded `POSITIVE_CONFIRMED` at 05:14:25.853 UTC on 2026-10-20: both DNS families
+resolved and TCP port 5432 connected on both observed addresses. Staging gateway
+probe `4e2f7a0c` recorded `UNREACHABLE_OBSERVED` at 05:19:52.923 UTC: both DNS
+families returned `NOT_FOUND`, and attempts to the exact positive-control
+addresses timed out for IPv4 and returned unreachable for IPv6. These probes
+sent no application bytes or credentials and did not test PostgreSQL TLS,
+authentication, SQL or health data. They establish time-specific reachability
+and unreachability, not durable firewall isolation or protection against later
+network/configuration changes.
+
+The gateway was restored as deployment `bd0326bf`, **ACTIVE**, with the exact
+original staging gateway command. The private operator receipts
+`database-network-positive-receipt.json`, `database-network-negative-receipt.json`
+and `gateway-network-test-restoration-20261020.json` retain these results.
+Database TLS and runtime-role verification, migrations/finalization, WHOOP owner
+confirmation and health consent remain incomplete. Removing active provisioning
+variables does not erase provider history.
 
 ## Resource change
 
 Use the existing dedicated personal WHOOP project. Keep the gateway in its
-staging environment. Create the backend and PostgreSQL in the currently empty
+staging environment. The backend and PostgreSQL now occupy the dedicated
 production environment, which has a separate Railway private network. Verify
 that the gateway cannot reach the database over that private network before
 real data is enabled. This separation does not restrict outbound internet.
 
 | Resource | Proposed configuration |
 | --- | --- |
-| Backend | One replica, 0.5 vCPU and 500 MB RAM limits, own 1 GB persistent configuration/Tailscale volume, private Tailscale HTTPS only |
-| PostgreSQL | One replica, 0.5 vCPU and 500 MB RAM limits, own 1 GB persistent data volume, Railway private networking only, no public TCP proxy |
+| Backend | One replica, 0.5 vCPU and 500 MB RAM limits, own provider-default 5 GB capacity persistent configuration/Tailscale volume, private Tailscale HTTPS only |
+| PostgreSQL | One replica, 0.5 vCPU and 500 MB RAM limits, own provider-default 5 GB capacity persistent data volume, Railway private networking only, no public TCP proxy |
 | Gateway | Existing service and origin, independent volume and credentials; reviewed production cutover after backend verification |
 | Migration job | Temporary process with only a dedicated migration credential and CA; no WHOOP or gateway secret; no restart loop |
 | Synthetic fixture | Preserve during verification; stop after successful cutover without deleting its volume or evidence |
+
+The owner accepted the provider-default capacity after clarification. Railway's
+Hobby volumes default to 5 GB and cannot currently be downsized; billing follows
+actual storage used, including filesystem metadata, rather than all allocated
+capacity. [Railway volume reference](https://docs.railway.com/volumes/reference).
+The database stores authorization and encrypted token state; it is not a health
+history archive. The approved resources now exist; that does not establish
+normal service readiness or completion of the verification gates.
 
 PostgreSQL uses the official 17.11 bookworm AMD64 manifest
 `sha256:66aafa11cf15800a3c94763f7e11d1e7b2e37e5e84bc4ce027cb6e1e4bfaf4df`.
@@ -43,7 +149,8 @@ unchanged. Compute usage here includes CPU, memory, storage and service egress.
 The workspace inventory showed only this WHOOP project. Reaching the hard limit
 stops all its workloads; it does not guarantee uninterrupted service or cap
 separately billed subscriptions, agent usage or tax. This budget approval does
-not authorize the still-pending production resources, migrations or WHOOP consent.
+not itself authorize production resources, migrations or WHOOP consent;
+the resource/migration approvals were obtained separately as recorded above.
 
 For initial activation, propose no paid backup schedule or historical health
 archive. WHOOP remains the source of health records. Losing the database would
@@ -97,6 +204,14 @@ extend human delegation silently. The pinned CLI's variable-delete command can
 redeploy the current phase: account for that behavior, verify phase completion,
 and deliberately select the normal command and reviewed artifact. Removing a
 variable alone is not proof that the intended normal deployment is running.
+
+After the original four-hour operator container expired, the reviewed
+replacement reused the same production-scoped token and authority. The private
+`production-session-20261020/result.json` records no new token, preservation of
+the old stopped container and public-upload evidence, and no adoption of old
+upload receipts. The replacement expires at 09:19:20 UTC on 2026-10-20; the
+original delegation hard stop remains 01:16:00 UTC on 2026-10-21. This replacement
+does not extend the approved delegation or authorize additional operations.
 
 After owner verification and database finalization, the separate
 [backend configuration helper](../backend-provision/README.md) accepts only the
@@ -173,8 +288,9 @@ gateway can steal gateway login material or fabricate plausible metrics. The
 pinned offline reader rejects remote free text and arbitrary MCP metadata, but
 does not prove metric authenticity or eliminate local runtime/kernel risks.
 
-That decision explicitly excluded new billing, real migrations and WHOOP user
-consent. Present the exact resource, storage/budget, production operator and
-one-off migration changes for approval once their preparation is reviewable.
+That initial decision explicitly excluded new billing, real migrations and WHOOP
+user consent. The subsequent specific resource, storage, production operator and
+fresh-database migration approvals are recorded above; do not infer approval for
+additional resources, an existing database or broader operator authority.
 Complete WHOOP consent with the owner at the actual consent screen. No DNS,
 main static website, School, merge or unrelated account change is included.

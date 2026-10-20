@@ -96,6 +96,37 @@ function entries(filename, expected) {
   const names = fs.readdirSync(filename).sort();
   if (names.length !== expected.length || names.some((name, index) => name !== [...expected].sort()[index])) fail();
 }
+export function validateVolumeRoot(phase, { filesystem = fs } = {}) {
+  try {
+    if (!['init', 'configure', 'enable', 'finalize'].includes(phase)) fail();
+    const initial = phase === 'init';
+    const root = filesystem.lstatSync(ROOT);
+    const owner = initial ? 0 : 999;
+    if (!root.isDirectory() || root.isSymbolicLink() || root.uid !== owner || root.gid !== owner ||
+        !(initial ? [0o700, 0o755] : [0o700]).includes(root.mode & 0o7777)) fail();
+    const names = filesystem.readdirSync(ROOT).sort();
+    const expected = initial ? [] : ['config', 'pgdata', 'provision-state.json', 'run', 'tls'];
+    if (names.includes('lost+found')) expected.push('lost+found');
+    expected.sort();
+    if (names.length !== expected.length || names.some((name, index) => name !== expected[index])) fail();
+    if (!names.includes('lost+found')) return;
+    const filename = ROOT + '/lost+found';
+    const valid = st => st.isDirectory() && !st.isSymbolicLink() && st.uid === 0 && st.gid === 0 && (st.mode & 0o7777) === 0o700;
+    const before = filesystem.lstatSync(filename);
+    if (!valid(before)) fail();
+    if (!initial) return;
+    // Only root init may enumerate this filesystem-owned directory. Later UID
+    // 999 phases check its protected metadata, never change or read its contents.
+    const fd = filesystem.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+    try {
+      const opened = filesystem.fstatSync(fd);
+      if (!valid(opened) || opened.dev !== before.dev || opened.ino !== before.ino ||
+          filesystem.readdirSync('/proc/self/fd/' + fd).length !== 0) fail();
+      const after = filesystem.lstatSync(filename);
+      if (!valid(after) || after.dev !== opened.dev || after.ino !== opened.ino) fail();
+    } finally { filesystem.closeSync(fd); }
+  } catch { fail(); }
+}
 function exclusive(filename, value) {
   const fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
   try { fs.writeFileSync(fd, value); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
@@ -163,9 +194,8 @@ export async function runProvision(phase, { input = process.stdin } = {}) {
     '-d', database, '-v', 'ON_ERROR_STOP=1', ...(file ? ['-f', SOURCE + '/' + value] : [])], file ? undefined : value);
   try {
     if (phase === 'init') {
-      // No input read in this branch. Reject every existing file/directory.
-      const st = fs.lstatSync(ROOT);
-      if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== 0 || fs.readdirSync(ROOT).length !== 0) fail();
+      // No input read in this branch. Only a verified empty lost+found is allowed.
+      validateVolumeRoot(phase);
       lock = fs.openSync(ROOT + '/.provision.lock', fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
       lockStat = fs.fstatSync(lock); fs.fchownSync(lock, 999, 999);
       for (const name of ['pgdata', 'config', 'tls', 'run']) { fs.mkdirSync(ROOT + '/' + name, { mode: 0o700 }); fs.chownSync(ROOT + '/' + name, 999, 999); }
@@ -177,8 +207,8 @@ export async function runProvision(phase, { input = process.stdin } = {}) {
       stateWrite({ version: 1, phase: 'initialized', host: null }, true);
       return { phase: 'initialized' };
     }
-    for (const name of ['', '/pgdata', '/config', '/tls', '/run']) directory(ROOT + name);
-    entries(ROOT, ['pgdata', 'config', 'tls', 'run', 'provision-state.json']);
+    validateVolumeRoot(phase);
+    for (const name of ['/pgdata', '/config', '/tls', '/run']) directory(ROOT + name);
     entries(ROOT + '/run', []);
     lock = fs.openSync(ROOT + '/.provision.lock', fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
     lockStat = fs.fstatSync(lock);

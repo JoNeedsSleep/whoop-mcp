@@ -11,7 +11,7 @@
 !deploy/staging/runtime-check.mjs
 !backend-artifact/
 !backend-artifact/package.json
-!backend-artifact/node_modules/**
+!backend-dependencies.tar
 !backend-artifact/dist/**
 !backend-artifact/web/
 !backend-artifact/web/dist/**
