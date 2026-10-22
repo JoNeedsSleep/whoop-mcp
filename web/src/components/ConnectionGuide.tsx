@@ -1,99 +1,49 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { CopyButton } from "@/components/CopyButton";
 
-export function ConnectionGuide({ token }: { token?: string }) {
-  const tok = token ?? "YOUR_TOKEN";
-  const mcpUrl = `${window.location.origin}/mcp`;
-
-  const claudeCodeCommand = `claude mcp add --transport http whoop ${mcpUrl} --header "Authorization: Bearer ${tok}"`;
-
-  const mcpJson = `{
-  "mcpServers": {
-    "whoop": {
-      "url": "${mcpUrl}",
-      "headers": { "Authorization": "Bearer ${tok}" }
-    }
-  }
-}`;
-
-  const tokenStepText = token ? "Your new token is filled in below." : "Create a token below and copy it.";
-
+export function ConnectionGuide() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Connect an AI assistant</CardTitle>
+        <CardTitle>Connect Codex and Claude Code</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
-        <div className="flex flex-col gap-2">
-          <p className="text-sm text-muted-foreground">
-            Use the MCP server URL below. Pick the path that matches your client.
+        <div className="rounded-lg border border-border bg-muted p-3 text-sm">
+          <p className="font-medium">Gateway setup · deployment required</p>
+          <p className="mt-1 text-muted-foreground">
+            The gateway supports both clients with separate browser sign-ins. Set up its
+            protected HTTPS address first. This sample preview cannot connect to either assistant.
           </p>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 overflow-x-auto rounded-lg border border-border bg-muted px-2.5 py-1.5 text-sm select-text">
-              {mcpUrl}
-            </code>
-            <CopyButton text={mcpUrl} label="Copy URL" />
-          </div>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <h3 className="text-sm font-medium">Claude Desktop · Claude.ai · ChatGPT (OAuth — no token)</h3>
+        <section className="flex flex-col gap-2" aria-label="Codex setup">
+          <h3 className="text-sm font-medium">Codex</h3>
           <ol className="list-decimal space-y-1 pl-5 text-sm">
-            <li>
-              Open your assistant's settings and go to Connectors. (Custom connectors require a paid plan; on
-              Team/Enterprise an admin may need to enable custom connectors first.)
-            </li>
-            <li>Click "Add custom connector".</li>
-            <li>
-              Give it a name (e.g. "WHOOP") and paste the MCP server URL above as the remote server URL, then save.
-            </li>
-            <li>Click "Connect" and log in with WHOOP in the browser window that opens.</li>
-            <li>Enable the WHOOP connector in your chat.</li>
+            <li>Add WHOOP as a Streamable HTTP MCP server using the approved gateway URL and client ID <code>codex</code>.</li>
+            <li>Set the registered callback and listener port, then authenticate through your browser.</li>
+            <li>Use the WHOOP tools in Codex. Local app, CLI and IDE clients on the same host share MCP configuration.</li>
           </ol>
-          <p className="text-sm text-muted-foreground">
-            No token needed — the connector runs the WHOOP login for you.
-          </p>
-          <div>
-            <CopyButton text={mcpUrl} label="Copy URL" />
-          </div>
-        </div>
+          <a className="text-sm underline" href="https://developers.openai.com/codex/mcp" target="_blank" rel="noreferrer">
+            Codex setup reference
+          </a>
+        </section>
 
-        <div className="flex flex-col gap-2">
-          <h3 className="text-sm font-medium">Claude Code (CLI)</h3>
-          <ol className="list-decimal space-y-2 pl-5 text-sm">
-            <li>{tokenStepText}</li>
-            <li>
-              Run this command (your token is already included):
-              <pre className="mt-1 overflow-x-auto rounded-lg border border-border bg-muted px-2.5 py-1.5 text-xs">
-                <code className="font-mono select-text">{claudeCodeCommand}</code>
-              </pre>
-              <div className="mt-1">
-                <CopyButton text={claudeCodeCommand} label="Copy command" />
-              </div>
-            </li>
-            <li>Restart Claude Code — the WHOOP tools appear as mcp__whoop__*.</li>
+        <section className="flex flex-col gap-2" aria-label="Claude Code setup">
+          <h3 className="text-sm font-medium">Claude Code</h3>
+          <ol className="list-decimal space-y-1 pl-5 text-sm">
+            <li>Add WHOOP as an HTTP MCP server using the same approved gateway URL and client ID <code>claude-code</code>.</li>
+            <li>Set the fixed callback port to match its gateway registration.</li>
+            <li>Open <code>/mcp</code> in Claude Code and complete browser sign-in.</li>
+            <li>Use the WHOOP tools in Claude Code, including alongside Codex.</li>
           </ol>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <h3 className="text-sm font-medium">Cursor · Cline (mcp.json)</h3>
-          <ol className="list-decimal space-y-2 pl-5 text-sm">
-            <li>{tokenStepText}</li>
-            <li>
-              Add this to your mcp.json (Cursor: ~/.cursor/mcp.json; Cline: its MCP settings):
-              <pre className="mt-1 overflow-x-auto rounded-lg border border-border bg-muted px-2.5 py-1.5 text-xs">
-                <code className="font-mono select-text whitespace-pre">{mcpJson}</code>
-              </pre>
-              <div className="mt-1">
-                <CopyButton text={mcpJson} label="Copy config" />
-              </div>
-            </li>
-            <li>Reload the client — the WHOOP tools become available.</li>
-          </ol>
-        </div>
+          <a className="text-sm underline" href="https://code.claude.com/docs/en/mcp" target="_blank" rel="noreferrer">
+            Claude Code setup reference
+          </a>
+        </section>
 
         <p className="text-sm text-muted-foreground">
-          Test it: ask your assistant "Show me my WHOOP recovery today."
+          Each client gets a separate, revocable connection lasting seven days.
+          Your OpenAI and Anthropic account credentials stay out of the WHOOP service.
+          Use the gateway owner page to revoke either client. Tokens created here are not gateway credentials.
         </p>
       </CardContent>
     </Card>

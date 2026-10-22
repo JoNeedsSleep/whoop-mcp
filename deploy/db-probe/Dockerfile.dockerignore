@@ -1,0 +1,10 @@
+*
+!deploy/
+!deploy/db-probe/
+!deploy/db-probe/Dockerfile
+!deploy/db-probe/Dockerfile.dockerignore
+!deploy/db-probe/probe.mjs
+!deploy/db-probe/entrypoint.sh
+!deploy/staging/
+!deploy/staging/runtime-check.mjs
+!db-probe-dependencies.tar

@@ -1,0 +1,11 @@
+*
+!deploy/
+!deploy/postgres/
+!deploy/postgres/Dockerfile.migration-window
+!deploy/postgres/Dockerfile.migration-window.dockerignore
+!deploy/postgres/provision.mjs
+!deploy/postgres/postgresql.conf.template
+!deploy/postgres/pg_hba.conf
+!deploy/postgres/pg_ident.conf
+!deploy/postgres/migration-window.mjs
+!deploy/postgres/migration-window-entrypoint.sh

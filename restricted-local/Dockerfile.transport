@@ -1,0 +1,11 @@
+# Build from the repository-shaped allowlisted context, explicitly arm64 on
+# this laptop. No installation, scripts, host files or build-time credentials.
+FROM tailscale/tailscale@sha256:4df4b4f79d8d6eeb02c67a45b486b23d6c9f6ed489847fbcb5c3c661847e727d AS tailscale
+FROM node@sha256:b20fe038d9592822dd534600a1ddf467e985178aa3fed60ec441a056c2cc45bd
+WORKDIR /app
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
+COPY --from=tailscale /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY deploy/railway/config.mjs deploy/railway/tailscale-supervisor.mjs ./deploy/railway/
+COPY restricted-local/fixed-relay.mjs restricted-local/transport-supervisor.mjs ./restricted-local/
+USER node
+ENTRYPOINT ["/usr/local/bin/node", "/app/restricted-local/transport-supervisor.mjs"]

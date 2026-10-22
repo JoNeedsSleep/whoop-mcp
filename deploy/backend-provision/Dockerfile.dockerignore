@@ -1,0 +1,11 @@
+*
+!deploy/
+!deploy/backend-provision/
+!deploy/backend-provision/Dockerfile
+!deploy/backend-provision/Dockerfile.dockerignore
+!deploy/backend-provision/provision.mjs
+!deploy/backend-provision/entrypoint.sh
+!deploy/railway/
+!deploy/railway/config.mjs
+!deploy/staging/
+!deploy/staging/runtime-check.mjs

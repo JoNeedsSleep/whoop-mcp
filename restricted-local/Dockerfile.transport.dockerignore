@@ -1,0 +1,10 @@
+*
+!deploy/
+!deploy/railway/
+!deploy/railway/config.mjs
+!deploy/railway/tailscale-supervisor.mjs
+!restricted-local/
+!restricted-local/Dockerfile.transport
+!restricted-local/Dockerfile.transport.dockerignore
+!restricted-local/fixed-relay.mjs
+!restricted-local/transport-supervisor.mjs

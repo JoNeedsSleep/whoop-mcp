@@ -1,25 +1,33 @@
+import { fetch as patchedFetch } from "undici";
+
 const API_BASE = "https://api.prod.whoop.com/developer";
-type FetchImpl = typeof fetch;
+// Use the explicitly pinned client, not Node's independently bundled Undici.
+// Keep injected fixtures limited to the request/response surface used here.
+type FetchResponse = Pick<Response, "ok" | "status" | "json"> & { headers: Pick<Headers, "get"> };
+type FetchImpl = (url: string, init: {
+  headers: Record<string, string>; redirect: "error"; signal: AbortSignal;
+}) => Promise<FetchResponse>;
 type Range = { start?: string; end?: string; limit?: number };
 
 export class WhoopClient {
   constructor(
     private getAccessToken: () => Promise<string>,
-    private forceRefresh: () => Promise<string>,
-    private fetchImpl: FetchImpl = fetch,
+    private forceRefresh: (rejectedAccessToken: string) => Promise<string>,
+    private fetchImpl: FetchImpl = patchedFetch,
   ) {}
 
-  private async raw(path: string, query: Record<string, string> = {}, token?: string): Promise<Response> {
+  private async raw(path: string, query: Record<string, string> = {}, token?: string): Promise<FetchResponse> {
     const at = token ?? await this.getAccessToken();
     const url = new URL(API_BASE + path);
     for (const [k, v] of Object.entries(query)) if (v != null) url.searchParams.set(k, v);
-    return this.fetchImpl(url.toString(), { headers: { Authorization: `Bearer ${at}` } });
+    return this.fetchImpl(url.toString(), { headers: { Authorization: `Bearer ${at}` }, redirect: "error", signal: AbortSignal.timeout(10_000) });
   }
 
   private async json<T>(path: string, query: Record<string, string> = {}): Promise<T> {
-    let res = await this.raw(path, query);
+    const accessToken = await this.getAccessToken();
+    let res = await this.raw(path, query, accessToken);
     if (res.status === 401) {
-      const at = await this.forceRefresh();
+      const at = await this.forceRefresh(accessToken);
       res = await this.raw(path, query, at);
       if (res.status === 401) throw new Error("WHOOP authorization failed — please reconnect your WHOOP account.");
     }
@@ -36,7 +44,9 @@ export class WhoopClient {
     const out: any[] = [];
     let nextToken: string | undefined;
     const limit = range.limit ?? 25;
+    let pages = 0;
     do {
+      if (++pages > 4) throw new Error("WHOOP pagination limit exceeded");
       const q: Record<string, string> = { limit: String(Math.min(limit, 25)) };
       if (range.start) q.start = range.start;
       if (range.end) q.end = range.end;

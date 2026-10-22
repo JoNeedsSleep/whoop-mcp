@@ -15,17 +15,13 @@ type FakeRow = {
   updatedAt: Date;
 };
 
-/**
- * Minimal fake db supporting only the exact Drizzle chains TokenStore.getValidAccessToken
- * calls: db.select().from(...).where(...) -> Promise<[row]>, and
- * db.update(...).set(...).where(...) -> mutates the row in place (simulating persistence).
- */
+// Single-call fixture only; database locking is covered by the real PostgreSQL suite.
 function fakeDb(row: FakeRow) {
-  return {
+  const db = {
     select: () => ({
-      from: () => ({
-        where: async () => [row],
-      }),
+      from: (table: unknown) => table === schema.users
+        ? { where: () => ({ for: async () => [{ id: row.userId }] }) }
+        : { where: async () => [row] },
     }),
     update: () => ({
       set: (patch: Partial<FakeRow>) => ({
@@ -35,6 +31,7 @@ function fakeDb(row: FakeRow) {
       }),
     }),
   };
+  return { ...db, transaction: vi.fn(async (fn: (tx: typeof db) => unknown, _config?: unknown) => fn(db)) };
 }
 
 describe("TokenStore.getValidAccessToken (fake db)", () => {
@@ -73,20 +70,22 @@ describe("TokenStore.getValidAccessToken (fake db)", () => {
         scopes: ["offline"],
       }),
     );
-    const store = new TokenStore(fakeDb(row) as any, key, refresh);
+    const db = fakeDb(row);
+    const store = new TokenStore(db as any, key, refresh);
 
     const at = await store.getValidAccessToken("user-1");
 
     expect(at).toBe("new-access");
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledWith("old-refresh");
+    expect(db.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "read committed" });
     expect(decrypt(row.refreshTokenEnc, key)).toBe("new-refresh");
     expect(row.accessTokenExpiresAt.getTime()).toBeGreaterThan(Date.now());
   });
 });
 
 describe("TokenStore.forceRefreshAccessToken (fake db)", () => {
-  it("unconditionally refreshes and persists even when the stored token is not expired", async () => {
+  it("refreshes the exact rejected token even when it is not expired", async () => {
     const row: FakeRow = {
       userId: "user-1",
       accessTokenEnc: encrypt("current-access", key),
@@ -105,13 +104,38 @@ describe("TokenStore.forceRefreshAccessToken (fake db)", () => {
     );
     const store = new TokenStore(fakeDb(row) as any, key, refresh);
 
-    const at = await store.forceRefreshAccessToken("user-1");
+    const at = await store.forceRefreshAccessToken("user-1", "current-access");
 
     expect(at).toBe("forced-new-access");
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledWith("current-refresh");
     expect(decrypt(row.accessTokenEnc, key)).toBe("forced-new-access");
     expect(decrypt(row.refreshTokenEnc, key)).toBe("forced-new-refresh");
+  });
+
+  it("reuses a replacement token when a delayed 401 names the old token", async () => {
+    const row: FakeRow = {
+      userId: "user-1", accessTokenEnc: encrypt("replacement-access", key),
+      refreshTokenEnc: encrypt("replacement-refresh", key),
+      accessTokenExpiresAt: new Date(Date.now() + 3600_000), scopes: ["offline"], updatedAt: new Date(),
+    };
+    const refresh = vi.fn();
+    const store = new TokenStore(fakeDb(row) as any, key, refresh);
+    expect(await store.forceRefreshAccessToken("user-1", "old-access")).toBe("replacement-access");
+    expect(refresh).not.toHaveBeenCalled();
+    expect(decrypt(row.refreshTokenEnc, key)).toBe("replacement-refresh");
+  });
+
+  it("does not replace stored credentials when the upstream refresh fails", async () => {
+    const row: FakeRow = {
+      userId: "user-1", accessTokenEnc: encrypt("current-access", key),
+      refreshTokenEnc: encrypt("current-refresh", key),
+      accessTokenExpiresAt: new Date(0), scopes: ["offline"], updatedAt: new Date(),
+    };
+    const before = { ...row };
+    const store = new TokenStore(fakeDb(row) as any, key, vi.fn(async () => { throw new Error("refresh failed"); }));
+    await expect(store.forceRefreshAccessToken("user-1", "current-access")).rejects.toThrow("refresh failed");
+    expect(row).toEqual(before);
   });
 });
 
@@ -155,14 +179,14 @@ describe("TokenStore.listMcpTokens / revokeMcpTokenById (fake db)", () => {
   it("listMcpTokens maps rows to TokenSummary (id = tokenHash, ISO dates)", async () => {
     const created = new Date("2026-08-01T10:00:00.000Z");
     const rows = [
-      { tokenHash: "h1", userId: "u1", type: "pat", label: "cli", createdAt: created, lastUsedAt: null, revokedAt: null },
+      { tokenHash: "h1", userId: "u1", type: "pat", label: "cli", createdAt: created, expiresAt: created, lastUsedAt: null, revokedAt: null },
     ];
     const db = {
       select: () => ({ from: () => ({ where: () => ({ orderBy: async () => rows }) }) }),
     };
     const store = new TokenStore(db as any, key, vi.fn());
     const out = await store.listMcpTokens("u1");
-    expect(out).toEqual([{ id: "h1", label: "cli", createdAt: created.toISOString(), lastUsedAt: null }]);
+    expect(out).toEqual([{ id: "h1", label: "cli", createdAt: created.toISOString(), expiresAt: created.toISOString(), type: "pat", lastUsedAt: null }]);
   });
 
   it("revokeMcpTokenById issues a scoped update (userId + tokenHash) setting revokedAt", async () => {
@@ -202,7 +226,8 @@ describe("TokenStore.listMcpTokens / revokeMcpTokenById (fake db)", () => {
   });
 });
 
-const url = process.env.DATABASE_URL;
+// Explicit disposable-test opt-in; never inherit a runtime DATABASE_URL.
+const url = process.env.WHOOP_TEST_DB_DISPOSABLE === "true" ? process.env.WHOOP_TEST_DATABASE_URL : undefined;
 
 describe.skipIf(!url)("TokenStore integration (real db)", () => {
   it("upsertUserAndTokens then getValidAccessToken round-trips through Postgres", async () => {
@@ -238,7 +263,7 @@ describe.skipIf(!url)("TokenStore integration (real db)", () => {
 
     const raw = await store.issueMcpToken(userId, "pat", "test token");
     const resolved = await store.resolveMcpToken(raw);
-    expect(resolved).toEqual({ userId });
+    expect(resolved).toMatchObject({ userId });
 
     await store.revokeMcpToken(raw);
     const afterRevoke = await store.resolveMcpToken(raw);
@@ -269,7 +294,7 @@ describe.skipIf(!url)("TokenStore integration (real db)", () => {
     });
 
     const rawB = await store.issueMcpToken(userBId, "pat");
-    expect(await store.resolveMcpToken(rawB)).toEqual({ userId: userBId });
+    expect(await store.resolveMcpToken(rawB)).toMatchObject({ userId: userBId });
 
     const tokensB = await store.listMcpTokens(userBId);
     expect(tokensB).toHaveLength(1);
@@ -277,7 +302,7 @@ describe.skipIf(!url)("TokenStore integration (real db)", () => {
 
     // User A attempts to revoke user B's token by id: must be a no-op.
     await store.revokeMcpTokenById(userAId, tokenBHash);
-    expect(await store.resolveMcpToken(rawB)).toEqual({ userId: userBId });
+    expect(await store.resolveMcpToken(rawB)).toMatchObject({ userId: userBId });
 
     // Positive control: user B revoking their own token does work.
     await store.revokeMcpTokenById(userBId, tokenBHash);
@@ -325,4 +350,83 @@ describe.skipIf(!url)("TokenStore integration (real db)", () => {
     await store.deleteUser(userAId);
     await store.deleteUser(userBId);
   });
+});
+
+describe("fixed bearer lifetime (fake db)", () => {
+  it("does not resolve expired, missing-expiry or revoked credentials", async () => {
+    for (const row of [
+      { userId: "u", expiresAt: new Date(0), revokedAt: null },
+      { userId: "u", expiresAt: undefined, revokedAt: null },
+      { userId: "u", expiresAt: new Date(Date.now() + 10000), revokedAt: new Date() },
+    ]) {
+      const update = vi.fn();
+      const db = { select: () => ({ from: () => ({ where: async () => [row] }) }), update };
+      expect(await new TokenStore(db as any, key, vi.fn()).resolveMcpToken("expired")).toBeNull();
+      expect(update).not.toHaveBeenCalled();
+    }
+  });
+  it("issues seven-day OAuth and PAT credentials with stored expiry", async () => {
+    const values = vi.fn(async (_row: any) => {});
+    const tx = {
+      select: () => ({ from: () => ({ where: () => ({ for: async () => [{ id: "u" }] }) }) }),
+      insert: () => ({ values }),
+    };
+    const store = new TokenStore({ transaction: async (fn: any) => fn(tx) } as any, key, vi.fn());
+    const before = Date.now();
+    await store.issueMcpToken("u", "oauth", undefined, "client-1");
+    await store.issueMcpToken("u", "pat");
+    for (const [row] of values.mock.calls) {
+      expect(row.expiresAt.getTime() - before).toBeGreaterThanOrEqual(7 * 86400000);
+      expect(row.expiresAt.getTime() - before).toBeLessThan(7 * 86400000 + 1000);
+    }
+    expect(values.mock.calls[0][0].clientId).toBe("client-1");
+  });
+  it("allows a week of access without sliding the deadline, then rejects the same bearer", async () => {
+    const start = Date.UTC(2026, 9, 18, 12);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(start);
+      const row = { userId: "u", clientId: "client", expiresAt: new Date(start + 7 * 86400000), revokedAt: null };
+      const set = vi.fn(() => ({ where: async () => {} }));
+      const db = { select: () => ({ from: () => ({ where: async () => [row] }) }), update: () => ({ set }) };
+      const store = new TokenStore(db as any, key, vi.fn());
+      for (const offset of [86400000, 7 * 86400000 - 1]) {
+        vi.setSystemTime(start + offset);
+        expect(await store.resolveMcpToken("same-bearer")).toMatchObject({ userId: "u", expiresAt: row.expiresAt });
+      }
+      expect(set.mock.calls.every(([patch]: any[]) => !Object.hasOwn(patch, "expiresAt"))).toBe(true);
+      vi.setSystemTime(start + 7 * 86400000);
+      expect(await store.resolveMcpToken("same-bearer")).toBeNull();
+      expect(set).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+it("holds the user lock across code validation, consumption and token insertion", async () => {
+  const events: string[] = [];
+  const row = { userId: "u", clientId: "client", codeHash: "hash" };
+  const tx = {
+    select: () => ({ from: () => ({ where: () => ({ for: async () => { events.push("lock"); return [{ id: "u" }]; } }) }) }),
+    delete: () => ({ where: () => ({ returning: async () => { events.push("consume"); return [row]; } }) }),
+    insert: () => ({ values: async () => { events.push("issue"); } }),
+  };
+  const db = {
+    select: () => ({ from: () => ({ where: async () => [row] }) }),
+    transaction: async (fn: any) => { events.push("begin"); const result = await fn(tx); events.push("commit"); return result; },
+  };
+  const store = new TokenStore(db as any, key, vi.fn());
+  await store.redeemAuthorizationCode("hash", () => { events.push("validate"); });
+  expect(events).toEqual(["begin", "lock", "consume", "validate", "issue", "commit"]);
+});
+
+it("revoke-all acquires the same user lock before touching tokens or codes", async () => {
+  const events: string[] = [];
+  const tx = {
+    select: () => ({ from: () => ({ where: () => ({ for: async () => { events.push("lock"); return [{ id: "u" }]; } }) }) }),
+    update: () => ({ set: () => ({ where: async () => { events.push("revoke"); } }) }),
+    delete: () => ({ where: async () => { events.push("delete-codes"); } }),
+  };
+  const store = new TokenStore({ transaction: async (fn: any) => fn(tx) } as any, key, vi.fn());
+  await store.revokeAllMcpTokens("u");
+  expect(events).toEqual(["lock", "revoke", "delete-codes"]);
 });

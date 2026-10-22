@@ -1,3 +1,4 @@
+import { fetch as patchedFetch } from "undici";
 import type { WhoopTokenSet } from "./types.js";
 
 const AUTH_BASE = "https://api.prod.whoop.com/oauth/oauth2";
@@ -6,12 +7,15 @@ export const WHOOP_SCOPES = [
   "read:sleep",
   "read:workout",
   "read:cycles",
-  "read:profile",
-  "read:body_measurement",
+  "read:profile", // required for fail-closed identity check; WHOOP also exposes email with this scope
   "offline",
 ];
 type Creds = { clientId: string; clientSecret: string };
-type FetchImpl = typeof fetch;
+// Node's global fetch can contain a different, older bundled Undici version.
+type FetchImpl = (url: string, init: {
+  method: "POST"; headers: Record<string, string>; body: URLSearchParams;
+  redirect: "error"; signal: AbortSignal;
+}) => Promise<Pick<Response, "ok" | "status" | "json">>;
 
 export function buildAuthorizeUrl(p: {
   clientId: string;
@@ -44,6 +48,8 @@ async function tokenRequest(body: URLSearchParams, fetchImpl: FetchImpl): Promis
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`WHOOP token endpoint ${res.status}`);
   return parseTokenResponse(await res.json());
@@ -54,7 +60,7 @@ export function exchangeCodeForTokens(
   redirectUri: string,
   creds: Creds,
   codeVerifier: string,
-  fetchImpl: FetchImpl = fetch,
+  fetchImpl: FetchImpl = patchedFetch,
 ): Promise<WhoopTokenSet> {
   return tokenRequest(
     new URLSearchParams({
@@ -72,7 +78,7 @@ export function exchangeCodeForTokens(
 export function refreshWhoopTokens(
   refreshToken: string,
   creds: Creds,
-  fetchImpl: FetchImpl = fetch,
+  fetchImpl: FetchImpl = patchedFetch,
 ): Promise<WhoopTokenSet> {
   return tokenRequest(
     new URLSearchParams({

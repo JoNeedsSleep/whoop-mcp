@@ -1,4 +1,4 @@
-export interface TokenSummary { id: string; label: string | null; createdAt: string; lastUsedAt: string | null; }
+export interface TokenSummary { id: string; label: string | null; createdAt: string; lastUsedAt: string | null; type: "oauth" | "pat"; expiresAt: string; }
 
 export class ApiError extends Error {
   status: number;
@@ -21,6 +21,8 @@ export const api = {
     fetch("/dashboard/api/tokens", { method: "POST", credentials: "include", headers: H, body: JSON.stringify({ label }) }).then(j<{ token: string }>),
   revokeToken: (id: string) =>
     fetch(`/dashboard/api/tokens/${encodeURIComponent(id)}`, { method: "DELETE", credentials: "include", headers: H }).then((r) => { if (!r.ok) throw new ApiError(r.status, `HTTP ${r.status}`); }),
+  revokeAllTokens: () =>
+    fetch("/dashboard/api/tokens", { method: "DELETE", credentials: "include", headers: H }).then((r) => { if (!r.ok) throw new ApiError(r.status, `HTTP ${r.status}`); }),
   updateTokenLabel: (id: string, label: string | null) =>
     fetch(`/dashboard/api/tokens/${encodeURIComponent(id)}`, {
       method: "PATCH", credentials: "include", headers: H, body: JSON.stringify({ label }),

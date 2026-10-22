@@ -1,0 +1,120 @@
+# Runtime image review — 2026-10-18
+
+The four recorded images were successfully scanned offline. They are **not free of known vulnerabilities**. The most relevant additional staging finding is the Go 1.27.1 HTTP/2 implementation in the pinned Tailscale binaries. Tailscale Serve processes that protocol before the Node application can apply its request limits. A daemon-only `GODEBUG=http2server=0` mitigation is supported by the pinned vendor source and has supervisor regression tests. The subsequent private staging gateway passed live certificate, ALPN and HTTP/1 checks, described in [staging validation](deploy/staging/VALIDATION.md). Those narrower checks do not clear the remaining image findings or approve real WHOOP access.
+
+## Evidence and isolation
+
+Private operator evidence is retained outside the Git checkout under `private-20261018a/vulnerability-review-20261018/`. `scan-result.json` records successful completion and verified removal of all scan containers and the dedicated public-advisory database volume. Raw results are `sync-scan.stdout`, `transport-scan.stdout`, `gateway-scan.stdout`, and `backend-scan.stdout`; stderr, summaries, image archive hashes, image inspection and scanner preflight records are retained. Earlier failed attempts remain under `attempt-1`, `attempt-2`, and `attempt-3`.
+
+The scanner was Grype 0.120.1/Syft 1.54.1, obtained from the official `anchore/grype` image at immutable Linux arm64 digest `sha256:906289103a4d477e0949e722213457733f3bfffb6f8c2dfb91760f1073acd429`. Its extracted executable SHA-256 is `94afbea0a9b65a3a83b820e622e8ac337e26608c860315208d58dad9a80b25db`. Registry TLS, digest and official release metadata were checked; **independent cryptographic signature verification was not performed**. See [Anchore's installation documentation](https://oss.anchore.com/docs/installation/grype/), [release](https://github.com/anchore/grype/releases/tag/v0.120.1), and [signature verification guidance](https://oss.anchore.com/docs/installation/verification/).
+
+The public Anchore database was schema v6.1.10, built `2026-10-18T06:27:17Z`, downloaded through verified HTTPS from the fixed vendor origin without redirects or credentials. The 191,132,039-byte archive matched vendor-manifest SHA-256 `e3d1010ec6e5dee9d3e84b2d5723c534d799e104e6573160e05b22c5292f091e`. `db-download.json` records its URL and checks. Scanner updates and external advisory lookups were disabled.
+
+The scanner ran as UID/GID 1000, with network `none`, read-only root, all capabilities dropped, no-new-privileges, private PID/IPC namespaces, bounded memory/process/CPU limits, and bounded temporary storage. It had no host bind mounts, Docker socket, SSH forwarding or account credentials. Only a fresh Docker volume of public advisory data was mounted read-only. Image archives were copied as inert data, not executed. The 12-check preflight passed. The optional `readonly-db-check` command was attempted after the scanner had already been removed, so it is **not** evidence of an observed EROFS failure; read-only volume status is established by saved Docker inspection.
+
+The first attempts failed from archive-format handling, a bounded scratch directory filling, and an exit 137 during the memory-backed database layout. The latter was consistent with memory pressure, but no OOM counter was captured for that child and it is not a proven OOM diagnosis. All failed-attempt cleanup checks passed. Moving public database data to a dedicated disk-backed Docker volume allowed all four scans to complete without expanding host access.
+
+## Scanned artifacts
+
+Counts below deduplicate by advisory ID, package name and version. They count package presence, **not exploitable endpoints**. Several Debian source advisories match multiple binary packages, and some matches do not apply to the installed platform or components.
+
+| Artifact | Platform | Image ID | Critical | High | Medium | Low | Negligible |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| sync | linux/arm64 | `sha256:b29b1a2aa60435c5b0e7a982aa5cc49e4026a254ed82ce5d39d4c825d53f064b` | 7 | 86 | 84 | 14 | 65 |
+| transport | linux/arm64 | `sha256:ca3118c861199d9e437ac0e9ddf312b429b58d545ade55d5e7cb727ea2543594` | 9 | 95 | 86 | 14 | 65 |
+| gateway | linux/amd64 | `sha256:b7f679512c790849e08550b1e8857ff5821cf9db5a1fc87aba46609722ecc6fd` | 9 | 95 | 86 | 14 | 65 |
+| backend | linux/amd64 | `sha256:02564bf133d440367ea6d56ff5d0c06887d8cce71d0b44792386a86faac57508` | 10 | 103 | 100 | 15 | 65 |
+
+Deduplicating by advisory ID alone gives critical/high counts of 6/34, 8/43, 8/43 and 9/51 respectively. This alternative count still does not establish exploitability. Later rebuilt staging images have different identities and are not covered by these exact image scans; identical base/binary layers can support a scoped inherited-component assessment, but not an unqualified scan claim for a different artifact.
+
+## Tailscale and Go: staging-relevant findings
+
+Both `/usr/local/bin/tailscale` and `/usr/local/bin/tailscaled` contain Go 1.27.1. The official stable package metadata still reports Tailscale 1.104.1 for tarballs and containers; current registry platform digests match the pinned copies. The [October 13 image update](https://tailscale.com/changelog) does not establish that the embedded Go binary was rebuilt with security fixes. No newer stable vendor binary was found during this review. Metadata is saved in `tailscale-stable-package-metadata.json` and `tailscale-current-registry-manifest.json`.
+
+The vendor's [go.toolchain.rev](https://github.com/tailscale/tailscale/blob/v1.104.1/go.toolchain.rev) pins `tailscale/go` commit `24ee2fd0610e6c505ee4ec061a81215afe119d1f` from September 19. Its VERSION is Go 1.27.1. The exact fork sources were checked, not just the version string: the HTTP/2 server retains the double flow-control refund and direct concurrent HPACK table mutation that Go 1.27.2 changes. This strengthens the finding beyond a generic package match; no exploit was executed.
+
+| Advisory | Relevant condition and assessment |
+| --- | --- |
+| [GO-2026-6612](https://pkg.go.dev/vuln/GO-2026-6612), scanner critical | An HTTP/2 client can defeat the connection-level receive-buffer limit. This is an availability/resource-exhaustion issue, not evidence of code execution or data disclosure. Tailscale Serve's ordinary HTTPS server exposes the affected parser to peers allowed by tailnet policy. |
+| [GO-2026-6603](https://pkg.go.dev/vuln/GO-2026-6603), high | HTTP/2 trailer declarations amplify memory before normal application handling. HTTP/1 is explicitly outside the described exploit. |
+| [GO-2026-6611](https://pkg.go.dev/vuln/GO-2026-6611), high | Many streams and SETTINGS window updates consume excessive CPU. Both client and server implementations are affected; disabling server HTTP/2 does not clear unrelated outbound client paths. |
+| [GO-2026-6617](https://pkg.go.dev/vuln/GO-2026-6617), high | HTTP/2 requests combined with header-table settings can crash a server through concurrent HPACK encoder mutation. |
+| [GO-2026-6604](https://pkg.go.dev/vuln/GO-2026-6604), scanner critical | Windows junction/root-directory escape. Not applicable to these Linux images. |
+| [GO-2026-6605](https://pkg.go.dev/vuln/GO-2026-6605), high | HTTP/1 CONNECT with a body, rejection and connection reuse can poison subsequent responses. The reviewed applications reject CONNECT; Tailscale's proxy routing also rejects authority-form paths before forwarding. Preserve a raw CONNECT negative check through the deployed Serve proxy. |
+| [GO-2026-6613](https://pkg.go.dev/vuln/GO-2026-6613), high | Requires a handler to return 2xx to CONNECT without taking over the connection. The reviewed routes do not do this. This conclusion concerns this configuration, not every Tailscale handler. |
+| [GO-2026-6610](https://pkg.go.dev/vuln/GO-2026-6610), high | Malformed HTTP/2 upstream framing headers can cause response smuggling through an HTTP/1 reverse proxy. Configured Serve upstreams are fixed loopback plain HTTP, so this reviewed proxy route does not use an HTTP/2 upstream. |
+| [GO-2026-6607](https://pkg.go.dev/vuln/GO-2026-6607), high | ECH extension memory amplification is a TLS issue, not fixed by disabling HTTP/2. The reviewed Serve TLS config does not configure ECH keys. Broader daemon TLS paths were not exhaustively proved unreachable. |
+| [GO-2026-6608](https://pkg.go.dev/vuln/GO-2026-6608), high; [GO-2026-6609](https://pkg.go.dev/vuln/GO-2026-6609), high | Multipart parsing and file-serving Range processing respectively. Fixed proxy-only Serve configuration and the synthetic app do not expose these handlers. Symbol presence alone does not demonstrate a call path. |
+
+The listed Go fixes are in 1.27.2 (some also in 1.26.9); the two template advisories GO-2026-6599/6600 are also retained in raw results. Prefer a verified vendor binary including these fixes when available, followed by pin updates and the private transport/lifecycle/TLS tests. Do not silently substitute an unofficial build or disable certificate verification.
+
+The narrow mitigation is supported by the [Go HTTP documentation](https://pkg.go.dev/net/http#hdr-HTTP_2), [pinned Tailscale Serve implementation](https://github.com/tailscale/tailscale/blob/v1.104.1/ipn/ipnlocal/serve.go), and exact vendor fork. Serve creates `http.Server` without an explicit Protocols/TLSNextProto override and uses ServeTLS. The fork's protocol selector respects `http2server=0`, removes h2 from normal ALPN and does not install the HTTP/2 handler. The supervisor change passes this constant only to the daemon rather than inheriting caller GODEBUG. Its 29 regression tests passed in an isolated fixture, recorded under `private-20261018a/http2-mitigation-20261018c/`.
+
+That isolated test does not exercise an enrolled native Serve listener. The subsequent staging gateway probes verified trusted TLS plus HTTP/1 success, HTTP/1 selection from a mixed h2/http1 offer, rejection of h2-only negotiation, and rejection of HTTP/2 prior-knowledge bytes and CONNECT without establishing a tunnel. These observations concern the tested gateway endpoint, not every daemon or an assertion about all internal handlers. The ACME renewal callback can construct a separate TLS config; ordinary handshake behavior must not be generalized to every renewal path without checking. Private exact-source tailnet grants and resource caps reduce availability blast radius but do not patch a parser.
+
+## Node and Debian base
+
+Actual isolated runtime metadata confirms Node 22.23.3, Undici 6.28.1 and OpenSSL 3.5.8. The [Node October announcement](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases) identifies high-severity fixes scheduled for October 21, with undisclosed prerequisites at review time. A current scanner cannot clear embargoed findings. The separate `DEPENDENCY_REVIEW.md` covers the five newly disclosed Undici advisories affecting 6.28.1 and explains why the private Unix `https` adapter avoids its network dispatcher. This does not clear Node itself or the real WHOOP backend's global-fetch paths.
+
+All four artifacts use Debian bookworm from the pinned Node base. The image copies Tailscale executables only; its OS package inventory is not the Alpine inventory of the Tailscale donor image.
+
+* `perl-base` 5.36.0-7+deb12u3 has 13 scanner matches fixed by Debian's 5.36.0-7+deb12u4. Updating the base or applying a verified pinned Debian security package update is concrete remediation. The actual service does not execute Perl. Additional component checks matter: [CVE-2026-8376](https://security-tracker.debian.org/tracker/CVE-2026-8376) requires a 32-bit build, while these images are 64-bit; Archive::Tar and Storable modules implicated by [CVE-2026-42496](https://security-tracker.debian.org/tracker/CVE-2026-42496) and [CVE-2026-57433](https://security-tracker.debian.org/tracker/CVE-2026-57433) were absent from inspected sync/gateway image layers. Socket is present, but no service call to its affected Perl API was found. `perl-component-inventory.json` records the static archive inspection.
+* [CVE-2026-5450](https://security-tracker.debian.org/tracker/CVE-2026-5450) matches glibc 2.36-9+deb12u14. It requires scanf's malloc-character conversion with an explicit width over 1024. Debian records bookworm as vulnerable but no-DSA/minor, while this scanner labels it critical. No relevant Node/Tailscale application call path was demonstrated. A bookworm fix is not listed; do not equate the scanner severity with proven remote compromise.
+* Other glibc, util-linux, ACL, gzip and ASN.1 package findings remain in raw results. They were not all proven unreachable. Local privilege-escalation conditions must be assessed against the actual hosting platform: local Docker no-new-privileges/capability checks are not evidence of Railway's controls.
+* Static arm64 base inspection found 11 setuid/setgid tools, none with ELF DT_RPATH/DT_RUNPATH. This excludes the specific `$ORIGIN` RPATH premise for those files in the reviewed [local glibc loader advisories](https://security-tracker.debian.org/tracker/CVE-2026-95818); it is not a general privilege-escalation proof or an amd64 finding. Removing unused setid tools is useful image hardening after verifying runtime needs.
+
+The shared base also ships global npm/corepack libraries, producing 11 high package matches including brace-expansion, pacote, ip-address, picomatch and sigstore. They are not application imports in the dependency-free staging wrappers. Prefer removing unused package managers from final runtime artifacts or updating them through a reviewed base update; retain build tools only in isolated build images. The actual WHOOP backend image additionally contains application dependency findings, addressed separately in `DEPENDENCY_REVIEW.md`; it is not the dependency-free synthetic fixture.
+
+## Decision limits and next verification
+
+For synthetic private staging, apply and verify the targeted HTTP/2 mitigation, exact tailnet grants, no public/Funnel ingress, resource limits and the actual callback/TLS checks. Keep the absence of WHOOP credentials and data explicit. Disclose remaining package findings and Node's pending release; these controls do not make the image advisory-free.
+
+Before real-data activation, replace affected runtimes with reviewed patched vendor builds, update the Debian fixable packages and application lockfile, rebuild pinned artifacts, and repeat the relevant isolated tests and image review. Check actual hosting UID, filesystem, capability and network behavior. Preserve a dated record of every accepted residual condition rather than suppressing scanner rows wholesale.
+
+## PostgreSQL preparation and personal-runtime exception — 2026-10-19
+
+The owner explicitly accepted the documented personal Railway runtime residuals,
+including unresolved runtime advisories. This is an exception to the preceding
+release target, not remediation or a clean-scan claim. It did not authorize new
+paid resources, real migrations or WHOOP consent.
+
+The newly selected official PostgreSQL 17.11 bookworm AMD64 image,
+`sha256:66aafa11cf15800a3c94763f7e11d1e7b2e37e5e84bc4ce027cb6e1e4bfaf4df`,
+was scanned as inert archive data using the same pinned scanner and verified
+October 18 advisory database. No target entrypoint executed. The scanner's
+network-none, read-only, non-root boundary and exact container/temporary-volume
+cleanup were verified again. Evidence is retained outside Git under
+`private-20261018a/postgres-vulnerability-review-20261019a/`.
+
+The scan found **6 critical, 100 high, 131 medium, 45 low and 125 negligible**
+advisory/package/version matches. The six critical matches represent three
+advisories, rather than six independent remote attack paths. No high/critical
+match named the PostgreSQL package. All 106 high/critical package matches were
+marked either not-fixed or won't-fix for this distribution in that database;
+this does not mean no other distribution or newer base can reduce them.
+
+* [CVE-2026-5450](https://security-tracker.debian.org/tracker/CVE-2026-5450)
+  matches four glibc binary packages. It has the same unusual scanf conversion
+  prerequisite described above. The bookworm issue remains; no relevant server
+  call path was demonstrated.
+* [CVE-2026-6653](https://security-tracker.debian.org/tracker/CVE-2026-6653)
+  affects libxml2 parsing of malicious XML. PostgreSQL can expose XML operations
+  to an authenticated SQL client, so restricted table grants alone are not proof
+  of unreachability after application/database-credential compromise. Debian
+  classifies this as a minor postponed issue on bookworm; the scanner labels
+  the package match critical. The differing labels do not patch the component.
+* [CVE-2025-7458](https://security-tracker.debian.org/tracker/CVE-2025-7458)
+  matches the installed SQLite library and requires crafted SQLite statements.
+  The PostgreSQL service uses PostgreSQL, not SQLite. No service call path into
+  this SQLite parser was demonstrated; package presence remains recorded.
+* The high OpenSSL match,
+  [CVE-2026-84782](https://security-tracker.debian.org/tracker/CVE-2026-84782),
+  concerns DTLS retransmission. The proposed database listener uses TLS over TCP,
+  not DTLS. This narrows the described path without claiming all library findings
+  are unreachable.
+
+Other package matches remain untriaged in the retained report. Mandatory verified
+TLS, SCRAM authentication, no public database ingress, separate Railway networks,
+restricted roles and resource limits reduce exposure; they do not turn these
+package findings into fixed vulnerabilities. The exact prepared PostgreSQL image
+and its accepted limitations must remain visible in the final activation review.

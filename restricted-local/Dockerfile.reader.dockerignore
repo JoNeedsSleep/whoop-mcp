@@ -1,0 +1,6 @@
+*
+!Dockerfile.reader
+!Dockerfile.reader.dockerignore
+!policy.mjs
+!cache.mjs
+!reader.mjs

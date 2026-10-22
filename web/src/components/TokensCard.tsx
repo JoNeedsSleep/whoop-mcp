@@ -32,7 +32,6 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 import { api, isUnauthorized, type TokenSummary } from "@/lib/api";
-import { ConnectionGuide } from "@/components/ConnectionGuide";
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : "Something went wrong");
 
@@ -65,6 +64,8 @@ function TokenRow({ token, onRevoke, onRename }: TokenRowProps) {
   return (
     <TableRow>
       <TableCell>{token.label ? token.label : <span className="text-muted-foreground">—</span>}</TableCell>
+      <TableCell>{token.type}</TableCell>
+      <TableCell>{formatDate(token.expiresAt)}</TableCell>
       <TableCell>{formatDate(token.createdAt)}</TableCell>
       <TableCell>{token.lastUsedAt ? formatDate(token.lastUsedAt) : "Never"}</TableCell>
       <TableCell>
@@ -149,6 +150,11 @@ export function TokensCard({ onUnauthorized }: { onUnauthorized: () => void }) {
     }
   }
 
+  async function handleRevokeAll() {
+    try { await api.revokeAllTokens(); await fetchTokens(); toast.success("All tokens revoked"); }
+    catch (err) { if (isUnauthorized(err)) onUnauthorized(); else toast.error(errorMessage(err)); }
+  }
+
   function handleRenameClick(token: TokenSummary) {
     setRenaming(token);
     setRenameLabel(token.label ?? "");
@@ -187,8 +193,8 @@ export function TokensCard({ onUnauthorized }: { onUnauthorized: () => void }) {
     <>
       <Card>
         <CardHeader>
-          <CardTitle>Personal access tokens</CardTitle>
-          <CardDescription>Use a token to authenticate MCP clients as your WHOOP account.</CardDescription>
+          <CardTitle>Access tokens</CardTitle>
+          <CardDescription>You stay signed in for seven days. Assistant access and personal tokens also last seven days and can be revoked here.</CardDescription>
           <CardAction>
             <div className="flex gap-2">
               <Input
@@ -206,6 +212,14 @@ export function TokensCard({ onUnauthorized }: { onUnauthorized: () => void }) {
           </CardAction>
         </CardHeader>
         <CardContent>
+          <AlertDialog>
+            <AlertDialogTrigger render={<Button variant="destructive" size="sm" />}>Revoke all access tokens</AlertDialogTrigger>
+            <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Revoke all access tokens?</AlertDialogTitle>
+              <AlertDialogDescription>Every OAuth and personal token will stop working. Clients must reconnect.</AlertDialogDescription>
+            </AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction variant="destructive" onClick={handleRevokeAll}>Revoke all</AlertDialogAction>
+            </AlertDialogFooter></AlertDialogContent>
+          </AlertDialog>
           {tokens === null ? (
             <div className="flex justify-center py-8">
               <Loader2Icon className="size-5 animate-spin text-muted-foreground" role="status" aria-label="Loading tokens" />
@@ -217,6 +231,8 @@ export function TokensCard({ onUnauthorized }: { onUnauthorized: () => void }) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Label</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Expires</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Last used</TableHead>
                   <TableHead />
@@ -256,7 +272,10 @@ export function TokensCard({ onUnauthorized }: { onUnauthorized: () => void }) {
               <CopyIcon />
             </Button>
           </div>
-          {newToken ? <ConnectionGuide token={newToken} /> : null}
+          <p className="text-sm text-muted-foreground">
+            Codex and Claude Code sign in separately through the gateway. This token is not
+            a gateway credential; see the gateway setup instructions.
+          </p>
           <DialogFooter showCloseButton />
         </DialogContent>
       </Dialog>

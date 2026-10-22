@@ -1,0 +1,13 @@
+**
+!Dockerfile
+!.dockerignore
+!deploy/
+!deploy/railway/
+!deploy/railway/config.mjs
+!deploy/staging/
+!deploy/staging/runtime-check.mjs
+!deploy/gateway-provision/
+!deploy/gateway-provision/provision.mjs
+!deploy/gateway-provision/entrypoint.sh
+!review-gateway/
+!review-gateway/config.mjs

@@ -1,0 +1,11 @@
+# Fallback for builders without per-Dockerfile ignore support.
+*
+!Dockerfile.reader
+!Dockerfile.sync
+!.dockerignore
+!policy.mjs
+!cache.mjs
+!reader.mjs
+!config.mjs
+!sync.mjs
+!login.mjs

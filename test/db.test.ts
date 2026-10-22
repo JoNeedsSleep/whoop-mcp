@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { getDb, schema } from "../src/db/client.js";
 import { eq } from "drizzle-orm";
 
-const url = process.env.DATABASE_URL;
+// Explicit disposable-test opt-in; never inherit a runtime DATABASE_URL.
+const url = process.env.WHOOP_TEST_DB_DISPOSABLE === "true" ? process.env.WHOOP_TEST_DATABASE_URL : undefined;
 describe.skipIf(!url)("db users table", () => {
   it("inserts and reads a user", async () => {
     const db = getDb(url!);

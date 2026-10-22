@@ -1,0 +1,9 @@
+*
+!Dockerfile.sync
+!Dockerfile.sync.dockerignore
+!policy.mjs
+!cache.mjs
+!config.mjs
+!sync.mjs
+!login.mjs
+!unix-https.mjs

@@ -1,0 +1,445 @@
+// These tests use an in-memory Docker model. They exercise orchestration and
+// fail-closed decisions; actual daemon/kernel isolation is verified separately.
+import assert from "node:assert/strict";
+import test from "node:test";
+import { callbackFirewallScript, createLauncher, firewallScript, FIREWALL_IMAGE, parseOperatorConfig, transportFirewallScript, volumeNames,
+  watchClient, WATCH_INTERVAL_MS, WATCH_STAGGER_MS } from "./launch.mjs";
+import { SYNC_INTERVAL_MS, SNAPSHOT_TIMEOUT_MS } from "./sync.mjs";
+
+const config = Object.freeze({ origin: "https://health.example.test", approvedIpv4: "104.16.0.34",
+  readerImage: `sha256:${"1".repeat(64)}`, syncImage: `sha256:${"2".repeat(64)}` });
+const privateConfig = Object.freeze({ origin: "https://gateway.test-tailnet.ts.net", readerImage: config.readerImage,
+  syncImage: config.syncImage, privateTransport: { image: `sha256:${"3".repeat(64)}`, gatewayIpv4: "100.101.102.103" } });
+const BASE_ENV = ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "NODE_VERSION=22.23.3"];
+const META = { rr_project_id: "whoop", rr_owner_id: "individual", rr_kill_date: "2026-11-17", rr_purpose: "restricted-local" };
+const clone = (value) => JSON.parse(JSON.stringify(value));
+const values = (args, key) => args.flatMap((value, index) => value === key ? [args[index + 1]] : []);
+const value = (args, key) => values(args, key)[0];
+
+test("both watches wait15minutes after completion and keep the separate Claude offset", async () => {
+  assert.equal(WATCH_INTERVAL_MS, 900000); assert.equal(WATCH_INTERVAL_MS, SYNC_INTERVAL_MS);
+  assert.equal(WATCH_STAGGER_MS, 61000); assert(WATCH_STAGGER_MS > SNAPSHOT_TIMEOUT_MS);
+  for (const clientId of ["codex", "claude-code"]) {
+    let time = 0; const starts = [], waits = [];
+    const stop = new Error("fixture complete");
+    await assert.rejects(watchClient({ sync: async (id) => {
+      assert.equal(id, clientId); starts.push(time); time += starts.length * 1000;
+    } }, clientId, { sleep: async (delay) => {
+      waits.push(delay); if (starts.length === 4) throw stop; time += delay;
+    }, reportFailure: () => assert.fail("Unexpected failure") }), error => error === stop);
+    const offset = clientId === "claude-code" ? 61000 : 0;
+    assert.deepEqual(starts, [0, 901000, 1803000, 2706000].map(value => value + offset));
+    assert.deepEqual(waits, [...(offset ? [offset] : []), 900000, 900000, 900000, 900000]);
+  }
+});
+
+test("long watch operations skip missed intervals and failures wait rather than retry", async () => {
+  let time = 0, failures = 0; const starts = [], waits = []; const stop = new Error("fixture complete");
+  await assert.rejects(watchClient({ sync: async () => {
+    starts.push(time);
+    if (starts.length === 1) time += 3 * WATCH_INTERVAL_MS + 7;
+    else throw new Error("untrusted diagnostic");
+  } }, "codex", { sleep: async (delay) => {
+    waits.push(delay); if (starts.length === 3) throw stop; time += delay;
+  }, reportFailure: (...args) => { assert.deepEqual(args, []); failures++; } }), error => error === stop);
+  assert.deepEqual(waits, [900000, 900000, 900000]);
+  assert.deepEqual(starts, [0, 3600007, 4500007]); assert.equal(failures, 2);
+});
+
+function fakeDocker({ mutateInspect, mutateVolume, mutateImage, intercept } = {}) {
+  const calls = []; const containers = new Map(); let sequence = 0;
+  const api = { calls, containers };
+  api.docker = async (args, options = {}) => {
+    calls.push({ args: [...args], options: { ...options } });
+    const replacement = await intercept?.(args, options, api);
+    if (replacement !== undefined) return replacement;
+    const ok = (stdout = "") => ({ code: 0, stdout });
+    if (args[0] === "volume" && args[1] === "create") return ok(args.at(-1));
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const row = { Name: args[2], Driver: "local", Options: null, Labels: clone(META) };
+      mutateVolume?.(row, args[2]); return ok(JSON.stringify([row]));
+    }
+    if (args[0] === "image" && args[1] === "inspect") {
+      const row = { Id: args[2], Os: "linux", Config: { Env: [...BASE_ENV] } };
+      mutateImage?.(row, args[2]); return ok(JSON.stringify([row]));
+    }
+    if (args[0] === "create") {
+      const name = `/${value(args, "--name")}`;
+      if ([...containers.values()].some((container) => !container.removed && container.row.Name === name)) return { code: 1, stdout: "" };
+      const imageIndex = args.indexOf("--entrypoint") + 2;
+      const id = (++sequence).toString(16).padStart(64, "0");
+      const tmpfs = Object.fromEntries(values(args, "--tmpfs").map((mount) => {
+        const split = mount.indexOf(":"); return [mount.slice(0, split), mount.slice(split + 1)];
+      }));
+      const mounts = values(args, "--mount").map((mount) => {
+        const fields = Object.fromEntries(mount.split(",").map((field) => field.split("=")));
+        return { Type: fields.type, Name: fields.source, Destination: fields.target, RW: !Object.hasOwn(fields, "readonly") };
+      });
+      const portBindings = {};
+      for (const publish of values(args, "--publish")) {
+        const [HostIp, HostPort, target] = publish.split(":"); portBindings[target] = [{ HostIp, HostPort }];
+      }
+      const row = {
+        Id: id, Name: name, Image: args[imageIndex], Config: { User: value(args, "--user"), Env: [...BASE_ENV],
+          Entrypoint: [value(args, "--entrypoint")], Cmd: args.slice(imageIndex + 1),
+          Labels: Object.fromEntries(values(args, "--label").map(label => {
+            const split = label.indexOf("="); return [label.slice(0, split), label.slice(split + 1)];
+          })) },
+        HostConfig: { Privileged: args.includes("--privileged"), ReadonlyRootfs: args.includes("--read-only"),
+          CapDrop: values(args, "--cap-drop"), CapAdd: values(args, "--cap-add").map((cap) => `CAP_${cap}`), SecurityOpt: values(args, "--security-opt"),
+          NetworkMode: value(args, "--network"), IpcMode: value(args, "--ipc"), CgroupnsMode: value(args, "--cgroupns"),
+          PidsLimit: Number(value(args, "--pids-limit")), Memory: value(args, "--memory") === "128m" ? 134217728 : 0,
+          MemorySwap: value(args, "--memory-swap") === "128m" ? 134217728 : 0, NanoCpus: Number(value(args, "--cpus")) * 1e9,
+          Binds: [], VolumesFrom: [], Devices: [], DeviceRequests: [], PidMode: "", UTSMode: "",
+          PortBindings: portBindings, Tmpfs: tmpfs, Dns: values(args, "--dns"), ExtraHosts: values(args, "--add-host") },
+        Mounts: [...mounts, ...Object.keys(tmpfs).map((Destination) => ({ Type: "tmpfs", Destination, RW: true }))],
+        State: { Running: false, ExitCode: 0 },
+      };
+      containers.set(id, { row, inspected: 0, removed: false }); return ok(id);
+    }
+    if (args[0] === "inspect") {
+      const container = containers.get(args[1]); assert.ok(container, "Inspect must name a created container ID");
+      const row = clone(container.row); mutateInspect?.(row, ++container.inspected, api);
+      return ok(JSON.stringify([row]));
+    }
+    if (args[0] === "start") {
+      const container = containers.get(args.at(-1)); assert.ok(container);
+      container.row.State.Running = !args.includes("--attach"); return ok();
+    }
+    if (args[0] === "exec") { assert.ok(containers.get(args[args[1] === "--interactive" ? 2 : 1])?.row.State.Running); return ok(); }
+    if (args[0] === "rm") {
+      assert.deepEqual(args.slice(0, 2), ["rm", "--force"]);
+      const container = containers.get(args[2]); assert.ok(container, "Cleanup must name an exact created ID");
+      container.row.State.Running = false; container.removed = true; return ok(args[2]);
+    }
+    assert.fail(`Unexpected Docker operation: ${args[0]} ${args[1]}`);
+  };
+  return api;
+}
+const commandCalls = (fake, command) => fake.calls.filter(({ args }) => args[0] === command);
+function assertNoHostAccess(fake) {
+  for (const { args } of commandCalls(fake, "create")) {
+    assert.ok(args.includes("--pull=never"));
+    assert.ok(!args.includes("--privileged")); assert.ok(!args.includes("--env")); assert.ok(!args.includes("--env-file"));
+    assert.ok(!args.includes("--volume")); assert.ok(!args.includes("-v"));
+    assert.ok(values(args, "--mount").every((mount) => mount.startsWith("type=volume,source=whoop_individual_sub-restricted-")));
+    assert.ok(values(args, "--mount").every((mount) => !mount.includes("docker.sock") && !mount.includes(".ssh")));
+    assert.equal(value(args, "--ipc"), "none"); assert.equal(value(args, "--cgroupns"), "private");
+    assert.deepEqual(values(args, "--cap-drop"), ["ALL"]);
+    assert.deepEqual(values(args, "--label").filter(label => label.startsWith("dev.orbstack.add-ca-certificates=")),
+      ["dev.orbstack.add-ca-certificates=false"]);
+  }
+  assert.equal(commandCalls(fake, "pull").length, 0);
+  assert.equal(fake.calls.filter(({ args }) => args[0] === "volume" && args[1] === "rm").length, 0);
+}
+function assertDisposed(fake) { assert.ok([...fake.containers.values()].every(({ removed }) => removed)); }
+
+test("operator configuration rejects alternate destinations, mutable images and extra authority", () => {
+  assert.deepEqual(parseOperatorConfig(config), config);
+  for (const change of [
+    { origin: "http://health.example.test" }, { origin: "https://health.example.test/" },
+    { origin: "https://health.example.test:8443" }, { origin: "https://user:secret@health.example.test" },
+    { origin: "https://127.0.0.1" }, { origin: "https://health.example.test/?url=https://attacker.test" },
+    { approvedIpv4: "127.0.0.1" }, { approvedIpv4: "10.0.0.1" }, { approvedIpv4: "172.16.0.1" },
+    { approvedIpv4: "192.168.1.1" }, { approvedIpv4: "169.254.169.254" }, { approvedIpv4: "100.64.0.1" },
+    { approvedIpv4: "0.0.0.0" }, { approvedIpv4: "224.0.0.1" }, { approvedIpv4: "::1" },
+    { approvedIpv4: "104.16.0.34;echo forbidden" }, { approvedIpv4: "104.016.0.34" },
+    { readerImage: "node:22" }, { syncImage: "sha256:123" }, { dockerHost: "tcp://attacker.test:2375" },
+  ]) assert.throws(() => parseOperatorConfig({ ...config, ...change }), /RESTRICTED_LAUNCH_UNAVAILABLE/);
+  assert.throws(() => volumeNames("../codex"));
+  assert.throws(() => firewallScript("127.0.0.1"));
+  assert.throws(() => firewallScript(config.approvedIpv4, 22));
+});
+
+test("reader gets only its read-only cache, no network, no auth volume, and a persistent stdio attachment", async () => {
+  const fake = fakeDocker(); const launcher = createLauncher(config, { docker: fake.docker });
+  await launcher.read("codex");
+  const [created] = commandCalls(fake, "create"); assert.equal(commandCalls(fake, "create").length, 1);
+  assert.equal(value(created.args, "--network"), "none"); assert.equal(value(created.args, "--user"), "1000:1000");
+  assert.deepEqual(values(created.args, "--mount"), [`type=volume,source=${volumeNames("codex").cache},target=/cache,readonly`]);
+  assert.equal(values(created.args, "--publish").length, 0); assert.equal(values(created.args, "--cap-add").length, 0);
+  assert.ok(created.args.includes("WHOOP_LOCAL_CLIENT_ID=codex")); assert.ok(created.args.includes("/app/reader.mjs"));
+  const started = commandCalls(fake, "start")[0]; assert.deepEqual(started.options, { interactive: true, persistent: true });
+  assert.ok(fake.calls.findIndex(({ args }) => args[0] === "inspect") < fake.calls.indexOf(started));
+  assert.equal(commandCalls(fake, "exec").length, 0); assertNoHostAccess(fake); assertDisposed(fake);
+});
+
+test("initialization provisions only empty private named volumes while offline", async () => {
+  const fake = fakeDocker(); await createLauncher(config, { docker: fake.docker }).init("claude-code");
+  const created = commandCalls(fake, "create")[0];
+  assert.equal(value(created.args, "--network"), "none"); assert.equal(value(created.args, "--user"), "0:0");
+  assert.deepEqual(values(created.args, "--cap-add"), ["CHOWN", "FOWNER"]);
+  assert.ok(created.args.includes(FIREWALL_IMAGE)); assert.equal(values(created.args, "--mount").length, 2);
+  const script = created.args.at(-1); assert.match(script, /test -z/); assert.match(script, /chmod 700 \/auth \/cache/);
+  const provision = JSON.parse(commandCalls(fake, "start")[0].options.input);
+  assert.deepEqual(provision, { clientId: "claude-code", origin: config.origin, tokenFile: "/auth/token.json",
+    stateFile: "/auth/state.sqlite", cacheFile: "/cache/cache.json" });
+  assert.equal(commandCalls(fake, "exec").length, 0); assertNoHostAccess(fake); assertDisposed(fake);
+  const volumes = fake.calls.filter(({ args }) => args[0] === "volume" && args[1] === "create");
+  assert.equal(volumes.length, 2);
+  for (const { args } of volumes) assert.ok(values(args, "--label").every(label => !label.startsWith("dev.orbstack.")));
+});
+
+test("sync loads application code only after verified firewall success and helper removal", async () => {
+  const fake = fakeDocker(); await createLauncher(config, { docker: fake.docker }).sync("codex");
+  const [app, helper] = commandCalls(fake, "create"); assert.equal(commandCalls(fake, "create").length, 2);
+  const [appId, helperId] = [...fake.containers.keys()];
+  assert.equal(value(app.args, "--network"), "bridge"); assert.equal(value(app.args, "--dns"), "0.0.0.0");
+  assert.equal(value(app.args, "--add-host"), `health.example.test:${config.approvedIpv4}`);
+  assert.deepEqual(app.args.slice(-4), ["-i", "/usr/local/bin/node", "-e", "setInterval(() => {}, 3600000)"]);
+  assert.equal(value(helper.args, "--network"), `container:${appId}`);
+  assert.deepEqual(values(helper.args, "--cap-add"), ["NET_ADMIN"]); assert.equal(values(helper.args, "--mount").length, 0);
+  assert.equal(values(app.args, "--publish").length, 0); assert.equal(values(helper.args, "--publish").length, 0);
+  const script = helper.args.at(-1);
+  assert.match(script, /iptables -P OUTPUT DROP/); assert.match(script, /ip6tables -P OUTPUT DROP/);
+  assert.match(script, /-d 104\.16\.0\.34\/32 --dport 443/); assert.doesNotMatch(script, /--dport 53|--dport 1764[34]/);
+  const execIndex = fake.calls.findIndex(({ args }) => args[0] === "exec");
+  const helperStart = fake.calls.findIndex(({ args }) => args[0] === "start" && args.at(-1) === helperId);
+  const helperExitInspection = fake.calls.findIndex(({ args }, index) => index > helperStart && args[0] === "inspect" && args[1] === helperId);
+  const helperRemoval = fake.calls.findIndex(({ args }) => args[0] === "rm" && args[2] === helperId);
+  assert.ok(helperStart < helperExitInspection && helperExitInspection < helperRemoval && helperRemoval < execIndex);
+  assert.deepEqual(fake.calls[execIndex].args, ["exec", "--interactive", appId, "/usr/bin/env", "-i", "/usr/local/bin/node", "/app/sync.mjs", "/auth/config.json"]);
+  assertNoHostAccess(fake); assertDisposed(fake);
+});
+
+test("login publishes only the client's fixed loopback callback and explicitly selects container binding", async () => {
+  for (const [clientId, port] of [["codex", 17643], ["claude-code", 17644]]) {
+    const fake = fakeDocker(); await createLauncher(config, { docker: fake.docker }).login(clientId);
+    const [app, helper] = commandCalls(fake, "create");
+    assert.deepEqual(values(app.args, "--publish"), [`127.0.0.1:${port}:${port}/tcp`]);
+    assert.equal(values(helper.args, "--publish").length, 0);
+    assert.match(helper.args.at(-1), new RegExp(`iptables -A INPUT -p tcp --dport ${port} -m conntrack --ctstate NEW -j ACCEPT`));
+    assert.deepEqual(commandCalls(fake, "exec")[0].args.slice(-3), ["/app/login.mjs", "/auth/config.json", "--container-callback"]);
+    assertNoHostAccess(fake); assertDisposed(fake);
+  }
+});
+
+test("capability spelling normalization accepts the same allowlist and rejects added, duplicate or substituted capabilities", async () => {
+  const bare = fakeDocker({ mutateInspect: (row) => {
+    row.HostConfig.CapAdd = row.HostConfig.CapAdd.map((cap) => cap.replace(/^CAP_/, ""));
+  } });
+  await createLauncher(config, { docker: bare.docker }).init("codex");
+  await createLauncher(config, { docker: bare.docker }).sync("codex");
+  assertDisposed(bare);
+  for (const caps of [["CAP_NET_ADMIN", "CAP_SYS_ADMIN"], ["CAP_NET_ADMIN", "NET_ADMIN"], ["CAP_SYS_ADMIN"], ["CAP_CAP_NET_ADMIN"]]) {
+    const fake = fakeDocker({ mutateInspect: (row) => {
+      if (row.Image === FIREWALL_IMAGE) row.HostConfig.CapAdd = caps;
+    } });
+    await assert.rejects(createLauncher(config, { docker: fake.docker }).sync("codex"), /RESTRICTED_LAUNCH_UNAVAILABLE/);
+    assert.equal(commandCalls(fake, "exec").length, 0); assertDisposed(fake);
+  }
+});
+
+test("unapproved volumes and image inspection fail before any container is created", async () => {
+  const changes = [
+    { mutateVolume: (row) => { row.Driver = "nfs"; } },
+    { mutateVolume: (row) => { row.Options = { type: "none", device: "/Users/sensitive", o: "bind" }; } },
+    { mutateVolume: (row) => { delete row.Labels.rr_owner_id; } },
+    { mutateImage: (row) => { row.Id = `sha256:${"a".repeat(64)}`; } },
+    { mutateImage: (row) => { row.Os = "windows"; } },
+  ];
+  for (const change of changes) {
+    const fake = fakeDocker(change); await assert.rejects(createLauncher(config, { docker: fake.docker }).read("codex"));
+    assert.equal(commandCalls(fake, "create").length, 0);
+  }
+});
+
+test("container inspection rejects credential mounts, extra authority and isolation drift before starting", async () => {
+  const mutations = [
+    (r) => { r.Config.User = "0:0"; }, (r) => { r.Config.Env.push("SSH_AUTH_SOCK=/ssh-agent"); },
+    (r) => { r.Config.Entrypoint = ["/bin/sh"]; }, (r) => { r.Config.Cmd = ["attacker.mjs"]; },
+    (r) => { delete r.Config.Labels["dev.orbstack.add-ca-certificates"]; },
+    (r) => { r.Config.Labels["dev.orbstack.add-ca-certificates"] = "true"; },
+    (r) => { r.Config.Labels["dev.orbstack.add-ca-certificates"] = false; },
+    (r) => { r.HostConfig.Privileged = true; }, (r) => { r.HostConfig.ReadonlyRootfs = false; },
+    (r) => { r.HostConfig.CapAdd = ["NET_ADMIN"]; }, (r) => { r.HostConfig.CapDrop = []; },
+    (r) => { r.HostConfig.SecurityOpt = []; }, (r) => { r.HostConfig.NetworkMode = "host"; },
+    (r) => { r.HostConfig.IpcMode = "host"; }, (r) => { r.HostConfig.CgroupnsMode = "host"; },
+    (r) => { r.HostConfig.PidMode = "host"; }, (r) => { r.HostConfig.UTSMode = "host"; },
+    (r) => { r.HostConfig.Binds = ["/Users:/host:ro"]; }, (r) => { r.HostConfig.VolumesFrom = ["other"]; },
+    (r) => { r.HostConfig.Devices = [{ PathOnHost: "/dev/disk0" }]; }, (r) => { r.HostConfig.DeviceRequests = [{}]; },
+    (r) => { r.HostConfig.PortBindings = { "80/tcp": [{ HostIp: "0.0.0.0", HostPort: "80" }] }; },
+    (r) => { r.HostConfig.MemorySwap = -1; }, (r) => { r.HostConfig.Tmpfs["/tmp"] = "rw,exec"; },
+    (r) => { r.Mounts.push({ Type: "bind", Source: "/var/run/docker.sock", Destination: "/socket", RW: true }); },
+    (r) => { r.Mounts.find((m) => m.Type === "volume").RW = true; },
+    (r) => { r.Mounts.push({ Type: "volume", Name: volumeNames("codex").auth, Destination: "/auth", RW: false }); },
+    (r) => { r.State.Running = true; },
+  ];
+  for (const [index, mutation] of mutations.entries()) {
+    const fake = fakeDocker({ mutateInspect: mutation });
+    await assert.rejects(createLauncher(config, { docker: fake.docker }).read("codex"), /RESTRICTED_LAUNCH_UNAVAILABLE/, `Mutation ${index}`);
+    assert.equal(commandCalls(fake, "start").length, 0, `Mutation ${index} must fail before start`);
+    assert.equal(commandCalls(fake, "exec").length, 0); assertDisposed(fake);
+  }
+});
+
+test("firewall failure, unverifiable exit and namespace drift prevent application execution and clean up", async () => {
+  const failures = [
+    { intercept: (args) => args[0] === "start" && args.includes("--attach") ? { code: 1, stdout: "" } : undefined },
+    { mutateInspect: (row, count) => { if (row.Image === FIREWALL_IMAGE && count === 2) row.State.Running = true; } },
+    { mutateInspect: (row, count) => { if (row.Image === FIREWALL_IMAGE && count === 2) row.State.ExitCode = 1; } },
+    { mutateInspect: (row, count) => { if (row.Image === config.syncImage && count === 2) row.HostConfig.ExtraHosts = ["health.example.test:127.0.0.1"]; } },
+    { mutateInspect: (row, count) => { if (row.Image === config.syncImage && count === 2) row.HostConfig.Dns = ["1.1.1.1"]; } },
+    { mutateInspect: (row, count) => { if (row.Image === config.syncImage && count === 2) delete row.Config.Labels["dev.orbstack.add-ca-certificates"]; } },
+    { mutateInspect: (row) => { if (row.Image === FIREWALL_IMAGE) row.HostConfig.NetworkMode = "host"; } },
+  ];
+  for (const failure of failures) {
+    const fake = fakeDocker(failure); await assert.rejects(createLauncher(config, { docker: fake.docker }).sync("codex"));
+    assert.equal(commandCalls(fake, "exec").length, 0); assertDisposed(fake);
+  }
+});
+
+test("application failure still removes both created containers and cleanup can retry an exact failed ID", async () => {
+  const appFailure = fakeDocker({ intercept: (args) => args[0] === "exec" ? { code: 1, stdout: "" } : undefined });
+  await assert.rejects(createLauncher(config, { docker: appFailure.docker }).sync("codex")); assertDisposed(appFailure);
+  let failedOnce = false;
+  const fake = fakeDocker({ intercept: (args) => {
+    if (args[0] === "rm" && !failedOnce) { failedOnce = true; return { code: 1, stdout: "" }; }
+    return undefined;
+  } });
+  const launcher = createLauncher(config, { docker: fake.docker });
+  await assert.rejects(launcher.sync("codex")); assert.equal(commandCalls(fake, "exec").length, 0);
+  await launcher.dispose(); assertDisposed(fake);
+  assert.ok(commandCalls(fake, "rm").every(({ args }) => /^[a-f0-9]{64}$/.test(args[2])));
+  assertNoHostAccess(fake);
+});
+
+test("private configuration requires an explicit pinned transport and cannot mix public or operator-selected sockets", () => {
+  assert.deepEqual(parseOperatorConfig(privateConfig), privateConfig);
+  for (const change of [{ approvedIpv4: "104.16.0.34" }, { socketPath: "/var/run/docker.sock" },
+    { privateTransport: { ...privateConfig.privateTransport, socketPath: "/state/tailscaled.sock" } },
+    { privateTransport: { ...privateConfig.privateTransport, image: "tailscale/tailscale:latest" } },
+    { privateTransport: { ...privateConfig.privateTransport, gatewayIpv4: "100.100.100.100" } },
+    { privateTransport: { ...privateConfig.privateTransport, gatewayIpv4: "127.0.0.1" } },
+    { privateTransport: { ...privateConfig.privateTransport, gatewayIpv4: "104.16.0.34" } }]) {
+    assert.throws(() => parseOperatorConfig({ ...privateConfig, ...change }));
+  }
+  assert.throws(() => callbackFirewallScript(1055));
+});
+
+test("private sync is IP-offline with only a read-only relay socket volume; reader remains cache-only", async () => {
+  const names = volumeNames("codex"); const fake = fakeDocker(); const launcher = createLauncher(privateConfig, { docker: fake.docker });
+  await launcher.sync("codex");
+  const created = commandCalls(fake, "create"); assert.equal(created.length, 1, "Offline sync must not launch a transport or network helper");
+  assert.equal(value(created[0].args, "--network"), "none");
+  assert.deepEqual(values(created[0].args, "--mount"), [`type=volume,source=${names.auth},target=/auth`,
+    `type=volume,source=${names.cache},target=/cache`, `type=volume,source=${names.transportSocket},target=/transport,readonly`]);
+  assert.deepEqual(values(created[0].args, "--dns"), []); assert.deepEqual(values(created[0].args, "--add-host"), []);
+  assert.deepEqual(values(created[0].args, "--publish"), []);
+  assert.ok(commandCalls(fake, "exec")[0].args.includes("/app/sync.mjs"));
+  assert.ok(!JSON.stringify(fake.calls).includes(names.transportState));
+  const reader = fakeDocker(); await createLauncher(privateConfig, { docker: reader.docker }).read("codex");
+  assert.deepEqual(values(commandCalls(reader, "create")[0].args, "--mount"), [`type=volume,source=${names.cache},target=/cache,readonly`]);
+  assert.equal(value(commandCalls(reader, "create")[0].args, "--network"), "none");
+  assertNoHostAccess(fake); assertNoHostAccess(reader); assertDisposed(fake); assertDisposed(reader);
+});
+
+test("private login permits only a fixed host-loopback callback and no new IP egress", async () => {
+  for (const [clientId, port] of [["codex", 17643], ["claude-code", 17644]]) {
+    const fake = fakeDocker(); await createLauncher(privateConfig, { docker: fake.docker }).login(clientId);
+    const [app, helper] = commandCalls(fake, "create");
+    assert.equal(value(app.args, "--network"), "bridge"); assert.deepEqual(values(app.args, "--dns"), ["0.0.0.0"]);
+    assert.deepEqual(values(app.args, "--add-host"), []); assert.deepEqual(values(app.args, "--publish"), [`127.0.0.1:${port}:${port}/tcp`]);
+    assert.ok(values(app.args, "--mount").includes(`type=volume,source=${volumeNames(clientId).transportSocket},target=/transport,readonly`));
+    const rules = helper.args.at(-1); assert.equal(rules, callbackFirewallScript(port));
+    assert.match(rules, /iptables -P OUTPUT DROP/); assert.match(rules, /ip6tables -P OUTPUT DROP/);
+    assert.doesNotMatch(rules, /iptables -A OUTPUT.*--ctstate NEW/);
+    assert.match(rules, new RegExp(`iptables -A INPUT -p tcp --dport ${port} -m conntrack --ctstate NEW -j ACCEPT`));
+    assert.ok(!JSON.stringify(fake.calls).includes(volumeNames(clientId).transportState));
+    assertNoHostAccess(fake); assertDisposed(fake);
+  }
+});
+
+test("private initialization separates transport identity/socket volumes from authorization and cache volumes", async () => {
+  const fake = fakeDocker(); const launcher = createLauncher(privateConfig, { docker: fake.docker });
+  await launcher.init("codex");
+  assert.equal(JSON.parse(commandCalls(fake, "start")[0].options.input).transport, "unix");
+  const transport = fakeDocker(); await createLauncher(privateConfig, { docker: transport.docker })["transport-init"]("codex");
+  const names = volumeNames("codex"); const [created] = commandCalls(transport, "create");
+  assert.equal(value(created.args, "--network"), "none");
+  assert.deepEqual(values(created.args, "--mount"), [`type=volume,source=${names.transportState},target=/state`,
+    `type=volume,source=${names.transportSocket},target=/transport`]);
+  assert.match(created.args.at(-1), /test -z/); assert.match(created.args.at(-1), /chmod 700 \/state \/transport/);
+  assert.ok(!JSON.stringify(transport.calls).includes(names.auth)); assert.ok(!JSON.stringify(transport.calls).includes(names.cache));
+  assertNoHostAccess(fake); assertNoHostAccess(transport); assertDisposed(fake); assertDisposed(transport);
+});
+
+test("dedicated transport starts only after its firewall and receives no user or gateway grants", async () => {
+  for (const command of ["transport-start", "transport-enroll"]) {
+    const fake = fakeDocker(); await createLauncher(privateConfig, { docker: fake.docker })[command]("claude-code");
+    const names = volumeNames("claude-code"); const [app, helper] = commandCalls(fake, "create");
+    const [appId, helperId] = [...fake.containers.keys()];
+    assert.equal(value(app.args, "--network"), "bridge"); assert.equal(value(app.args, "--user"), "1000:1000");
+    assert.deepEqual(values(app.args, "--dns"), ["1.1.1.1"]); assert.deepEqual(values(app.args, "--add-host"), []);
+    assert.deepEqual(values(app.args, "--mount"), [`type=volume,source=${names.transportState},target=/state`,
+      `type=volume,source=${names.transportSocket},target=/transport`]);
+    assert.deepEqual(values(app.args, "--publish"), []); assert.deepEqual(values(app.args, "--cap-add"), []);
+    assert.equal(value(helper.args, "--network"), `container:${appId}`); assert.equal(helper.args.at(-1), transportFirewallScript());
+    const execution = commandCalls(fake, "exec")[0];
+    assert.deepEqual(execution.args.slice(-3), command === "transport-enroll"
+      ? ["claude-code", privateConfig.privateTransport.gatewayIpv4, "--enroll"]
+      : ["/app/restricted-local/transport-supervisor.mjs", "claude-code", privateConfig.privateTransport.gatewayIpv4]);
+    assert.deepEqual(execution.options, { interactive: true, persistent: command === "transport-start" });
+    assert.ok(fake.calls.findIndex(({ args }) => args[0] === "rm" && args[2] === helperId) < fake.calls.indexOf(execution));
+    const cleanup = commandCalls(fake, "exec").filter(({ args }) => args.includes("-e"));
+    assert.equal(cleanup.length, 1); assert.equal(cleanup[0].args[2], appId);
+    assert.match(cleanup[0].args.at(-1), /process\.kill\(-1, "SIGTERM"\)/);
+    assert.equal(value(app.args, "--ipc"), "none"); assert.equal(value(app.args, "--user"), "1000:1000");
+    assert.ok(!JSON.stringify(fake.calls).includes(names.auth)); assert.ok(!JSON.stringify(fake.calls).includes(names.cache));
+    assert.doesNotMatch(JSON.stringify(fake.calls), /tskey-auth-|--auth-key|SSH_AUTH_SOCK|\/state\/tailscaled\.sock/);
+    assertNoHostAccess(fake); assertDisposed(fake);
+  }
+});
+
+test("transport firewall denies private destinations and UDP peer traffic before allowing public control HTTPS", () => {
+  const rules = transportFirewallScript().split("\n");
+  const httpsRule = rules.indexOf("iptables -A OUTPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT");
+  assert.ok(httpsRule > 0);
+  for (const range of ["10.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"]) {
+    const index = rules.indexOf(`iptables -A OUTPUT -d ${range} -j DROP`); assert.ok(index >= 0 && index < httpsRule);
+  }
+  const udpRules = rules.filter((rule) => rule.startsWith("iptables -A OUTPUT -p udp"));
+  assert.deepEqual(udpRules, ["iptables -A OUTPUT -p udp -d 1.1.1.1/32 --dport 53 -m conntrack --ctstate NEW -j ACCEPT"]);
+  assert.ok(rules.includes("iptables -P FORWARD DROP")); assert.ok(rules.includes("ip6tables -P OUTPUT DROP"));
+});
+
+test("private transport fails closed on firewall failure, state leakage, writable socket exposure or DNS drift", async () => {
+  const attempts = [
+    { command: "transport-start", intercept: (args) => args[0] === "start" && args.includes("--attach") ? { code: 1, stdout: "" } : undefined },
+    { command: "sync", mutateInspect: (row) => { row.Mounts.push({ Type: "volume", Name: volumeNames("codex").transportState, Destination: "/state", RW: false }); } },
+    { command: "sync", mutateInspect: (row) => { row.Mounts.find((mount) => mount.Destination === "/transport").RW = true; } },
+    { command: "sync", mutateInspect: (row) => { row.HostConfig.NetworkMode = "bridge"; } },
+    { command: "login", mutateInspect: (row) => { if (row.Image === config.syncImage) row.HostConfig.Dns = ["1.1.1.1"]; } },
+    { command: "transport-start", mutateInspect: (row) => { if (row.Image === privateConfig.privateTransport.image) row.HostConfig.PortBindings = { "1055/tcp": [{ HostIp: "0.0.0.0", HostPort: "1055" }] }; } },
+    { command: "transport-start", mutateInspect: (row) => { if (row.Image === privateConfig.privateTransport.image) row.HostConfig.Dns = ["192.168.1.1"]; } },
+    { command: "transport-start", mutateInspect: (row) => { if (row.Image === privateConfig.privateTransport.image) row.Name = "/different-owner"; } },
+  ];
+  for (const { command, ...options } of attempts) {
+    const fake = fakeDocker(options); await assert.rejects(createLauncher(privateConfig, { docker: fake.docker })[command]("codex"));
+    assert.equal(commandCalls(fake, "exec").length, 0); assertDisposed(fake);
+  }
+});
+
+test("atomic transport naming rejects a concurrent owner without starting or cleaning up the existing owner", { timeout: 10000 }, async () => {
+  let announce; let release;
+  const started = new Promise((resolve) => { announce = resolve; });
+  const held = new Promise((resolve) => { release = () => resolve({ code: 0, stdout: "" }); });
+  const fake = fakeDocker({ intercept: (args) => {
+    if (args[0] === "exec" && args.includes("/app/restricted-local/transport-supervisor.mjs")) { announce(); return held; }
+    return undefined;
+  } });
+  const first = createLauncher(privateConfig, { docker: fake.docker });
+  const second = createLauncher(privateConfig, { docker: fake.docker });
+  const running = first["transport-start"]("codex");
+  try {
+    await Promise.race([started, running.then(() => assert.fail("The first transport must remain active until released by the fixture"))]);
+    const ownerId = [...fake.containers.keys()][0];
+    assert.equal(fake.containers.get(ownerId).row.State.Running, true);
+    await assert.rejects(second["transport-enroll"]("codex")); await second.dispose();
+    assert.equal(commandCalls(fake, "exec").filter(({ args }) => args.includes("/app/restricted-local/transport-supervisor.mjs")).length, 1);
+    assert.equal(commandCalls(fake, "rm").filter(({ args }) => args[2] === ownerId).length, 0);
+    assert.equal(fake.containers.get(ownerId).row.State.Running, true);
+    assert.equal(fake.containers.get(ownerId).removed, false);
+  } finally { release(); await running; }
+  assertDisposed(fake); assertNoHostAccess(fake);
+});

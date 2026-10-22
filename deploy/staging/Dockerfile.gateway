@@ -1,0 +1,17 @@
+# The same production gateway modules plus staging-only bootstrap/role checks.
+# No production WHOOP app, dependencies, DB client or backend artifacts.
+FROM tailscale/tailscale@sha256:99691662a2e82fbfd2bf55db0fd52bacd2f4664ce6fd1deca3746a024144a2b7 AS tailscale
+FROM node@sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562
+WORKDIR /app
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
+COPY --from=tailscale /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY deploy/railway/config.mjs deploy/railway/tailscale-supervisor.mjs deploy/railway/runtime.mjs ./deploy/railway/
+COPY deploy/staging/service.mjs deploy/staging/bootstrap.mjs deploy/staging/gateway-bootstrap.mjs deploy/staging/gateway-runtime.mjs ./deploy/staging/
+COPY deploy/staging/provision.mjs deploy/staging/provision-gateway.mjs ./deploy/staging/
+COPY deploy/staging/runtime-check.mjs ./deploy/staging/
+COPY restricted-local/fixed-relay.mjs restricted-local/unix-https.mjs ./restricted-local/
+COPY review-gateway/gateway.mjs review-gateway/auth.mjs review-gateway/store.mjs review-gateway/server.mjs review-gateway/config.mjs review-gateway/index.mjs ./review-gateway/
+USER node
+ENV NODE_ENV=production
+ENTRYPOINT ["/usr/bin/setpriv", "--no-new-privs", "--", "/usr/local/bin/node", "/app/deploy/staging/gateway-runtime.mjs"]
+CMD ["/data/config/staging-gateway.json"]

@@ -1,0 +1,14 @@
+*
+!deploy/
+!deploy/railway/
+!deploy/railway/config.mjs
+!deploy/railway/tailscale-supervisor.mjs
+!deploy/staging/
+!deploy/staging/Dockerfile
+!deploy/staging/Dockerfile.dockerignore
+!deploy/staging/service.mjs
+!deploy/staging/runtime.mjs
+!deploy/staging/bootstrap.mjs
+!deploy/staging/provision.mjs
+!deploy/staging/provision-fixture.mjs
+!deploy/staging/runtime-check.mjs

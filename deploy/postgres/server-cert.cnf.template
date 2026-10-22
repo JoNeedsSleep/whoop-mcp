@@ -1,0 +1,8 @@
+# Render the same exact approved DATABASE_HOST used by postgres and the backend.
+# This is a leaf-certificate extension file, not a CA or a private key.
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @server_names
+[server_names]
+DNS.1 = @DATABASE_HOST@

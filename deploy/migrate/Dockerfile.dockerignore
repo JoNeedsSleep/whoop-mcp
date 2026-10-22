@@ -1,0 +1,15 @@
+*
+!deploy/
+!deploy/migrate/
+!deploy/migrate/Dockerfile
+!deploy/migrate/Dockerfile.dockerignore
+!deploy/migrate/migrate.mjs
+!deploy/migrate/bootstrap.mjs
+!deploy/migrate/entrypoint.sh
+!deploy/railway/
+!deploy/railway/config.mjs
+!deploy/staging/
+!deploy/staging/runtime-check.mjs
+!migration-artifact/
+!migration-dependencies.tar
+!migration-artifact/drizzle/**

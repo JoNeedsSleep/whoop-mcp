@@ -1,58 +1,43 @@
 import { describe, it, expect } from "vitest";
 import { loadConfig } from "../src/config.js";
-
-const base = {
-  DATABASE_URL: "postgres://x", ENCRYPTION_KEY: "a".repeat(64),
-  WHOOP_CLIENT_ID: "id", WHOOP_CLIENT_SECRET: "secret",
-  PUBLIC_BASE_URL: "https://example.com", PORT: "8080",
-  SESSION_SECRET: "test-session-secret-1234567890",
-};
-
-describe("loadConfig", () => {
-  it("parses valid env", () => {
-    const c = loadConfig(base as any);
-    expect(c.port).toBe(8080);
-    expect(c.publicBaseUrl).toBe("https://example.com");
+const base = { DATABASE_URL: "postgres://x", ENCRYPTION_KEY: "a".repeat(64),
+  WHOOP_CLIENT_ID: "id", WHOOP_CLIENT_SECRET: "secret", PUBLIC_BASE_URL: "https://example.com",
+  SESSION_SECRET: "s".repeat(32), ALLOWED_WHOOP_USER_ID: "42" };
+describe("single-user configuration", () => {
+  it("defaults to no approved MCP callbacks", () => {
+    expect(loadConfig(base).enableLegacyDirectMcp).toBe(false);
+    expect(loadConfig(base).approvedClientRedirectUris).toEqual([]);
+    expect(loadConfig(base).allowedWhoopUserId).toBe("42");
+    expect(loadConfig(base).bindHost).toBe("127.0.0.1");
+    expect(loadConfig(base).runMigrations).toBe(false);
   });
-  it("throws when ENCRYPTION_KEY is not 64 hex chars", () => {
-    expect(() => loadConfig({ ...base, ENCRYPTION_KEY: "short" } as any)).toThrow();
+  it("allows only loopback listeners and explicit migration opt-in", () => {
+    for (const host of ["0.0.0.0", "::", "localhost", "100.80.0.1", ""]) {
+      expect(() => loadConfig({ ...base, BIND_HOST: host })).toThrow();
+    }
+    expect(loadConfig({ ...base, BIND_HOST: "::1" }).bindHost).toBe("::1");
+    expect(loadConfig({ ...base, RUN_MIGRATIONS: "true" }).runMigrations).toBe(true);
+    expect(() => loadConfig({ ...base, RUN_MIGRATIONS: "yes" })).toThrow();
   });
-  it("throws when a required var is missing", () => {
-    const { WHOOP_CLIENT_ID, ...rest } = base;
-    expect(() => loadConfig(rest as any)).toThrow();
+  it("fails closed without the specific WHOOP identity", () => {
+    expect(() => loadConfig({ ...base, ALLOWED_WHOOP_USER_ID: undefined })).toThrow();
+    for (const id of ["", "0", "any", "042", "9007199254740992"]) {
+      expect(() => loadConfig({ ...base, ALLOWED_WHOOP_USER_ID: id })).toThrow();
+    }
   });
-
-  it("derives PUBLIC_BASE_URL from RAILWAY_PUBLIC_DOMAIN when unset", () => {
-    const { PUBLIC_BASE_URL, ...rest } = base;
-    const c = loadConfig({ ...rest, RAILWAY_PUBLIC_DOMAIN: "app.up.railway.app" } as any);
-    expect(c.publicBaseUrl).toBe("https://app.up.railway.app");
+  it("requires a canonical HTTPS origin configured explicitly", () => {
+    for (const origin of ["http://localhost", "https://example.com/", "https://example.com/path", "https://user:pass@example.com", "https://example.com?x=1", "https://example.com#x", ""]) {
+      expect(() => loadConfig({ ...base, PUBLIC_BASE_URL: origin, RAILWAY_PUBLIC_DOMAIN: "fallback.example" })).toThrow();
+    }
   });
-
-  it("treats an empty PUBLIC_BASE_URL as unset and derives from RAILWAY_PUBLIC_DOMAIN", () => {
-    const c = loadConfig({ ...base, PUBLIC_BASE_URL: "", RAILWAY_PUBLIC_DOMAIN: "app.up.railway.app" } as any);
-    expect(c.publicBaseUrl).toBe("https://app.up.railway.app");
+  it("accepts exact callback URLs and rejects wildcards and HTTP", () => {
+    expect(loadConfig({ ...base, APPROVED_CLIENT_REDIRECT_URIS: "https://client.example/cb" }).approvedClientRedirectUris).toEqual(["https://client.example/cb"]);
+    for (const uri of ["https://*.example/cb", "http://client.example/cb", "https://client.example/cb#x"]) {
+      expect(() => loadConfig({ ...base, APPROVED_CLIENT_REDIRECT_URIS: uri })).toThrow();
+    }
   });
-
-  it("prefers explicit PUBLIC_BASE_URL over RAILWAY_PUBLIC_DOMAIN", () => {
-    const c = loadConfig({ ...base, RAILWAY_PUBLIC_DOMAIN: "other.up.railway.app" } as any);
-    expect(c.publicBaseUrl).toBe("https://example.com");
-  });
-
-  it("throws when neither PUBLIC_BASE_URL nor RAILWAY_PUBLIC_DOMAIN is set", () => {
-    const { PUBLIC_BASE_URL, ...rest } = base;
-    expect(() => loadConfig(rest as any)).toThrow();
-  });
-
-  it("parses ALLOWED_WHOOP_EMAILS into a trimmed, lowercased list (empty when unset)", () => {
-    expect(loadConfig(base as any).allowedWhoopEmails).toEqual([]);
-    const c = loadConfig({ ...base, ALLOWED_WHOOP_EMAILS: "a@b.com,  C@D.com , " } as any);
-    expect(c.allowedWhoopEmails).toEqual(["a@b.com", "c@d.com"]);
-  });
-
-  it("parses RESTRICT_ACCESS as a boolean, default false", () => {
-    expect(loadConfig(base as any).restrictAccess).toBe(false);
-    expect(loadConfig({ ...base, RESTRICT_ACCESS: "true" } as any).restrictAccess).toBe(true);
-    expect(loadConfig({ ...base, RESTRICT_ACCESS: "1" } as any).restrictAccess).toBe(true);
-    expect(loadConfig({ ...base, RESTRICT_ACCESS: "false" } as any).restrictAccess).toBe(false);
+  it("requires explicit true to opt into legacy direct MCP", () => {
+    expect(loadConfig({ ...base, ENABLE_LEGACY_DIRECT_MCP: "true" }).enableLegacyDirectMcp).toBe(true);
+    expect(() => loadConfig({ ...base, ENABLE_LEGACY_DIRECT_MCP: "yes" })).toThrow();
   });
 });

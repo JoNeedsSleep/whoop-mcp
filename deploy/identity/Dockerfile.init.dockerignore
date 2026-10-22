@@ -1,0 +1,12 @@
+**
+!deploy/
+!deploy/identity/
+!deploy/identity/Dockerfile.init
+!deploy/identity/Dockerfile.init.dockerignore
+!deploy/identity/provision.mjs
+!deploy/identity/entrypoint.sh
+!deploy/railway/
+!deploy/railway/config.mjs
+!deploy/railway/tailscale-supervisor.mjs
+!deploy/staging/
+!deploy/staging/runtime-check.mjs

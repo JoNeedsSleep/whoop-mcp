@@ -1,0 +1,12 @@
+{
+  "publicOrigin": "https://gateway.example.invalid",
+  "upstreamOrigin": "https://whoop-service.example.invalid",
+  "upstreamTokenFile": "/run/secrets/whoop-service-token",
+  "ownerSecretHash": "REPLACE_WITH_SHA256_OF_RANDOM_OWNER_KEY",
+  "databaseFile": "/data/gateway.sqlite",
+  "port": 8090,
+  "clients": [
+    { "clientId": "codex", "name": "Codex", "redirectUris": ["http://127.0.0.1:17643/callback"] },
+    { "clientId": "claude-code", "name": "Claude Code", "redirectUris": ["http://localhost:17644/callback"] }
+  ]
+}

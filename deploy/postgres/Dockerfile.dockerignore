@@ -1,0 +1,14 @@
+*
+!deploy/
+!deploy/postgres/
+!deploy/postgres/Dockerfile
+!deploy/postgres/Dockerfile.dockerignore
+!deploy/postgres/postgresql.conf.template
+!deploy/postgres/pg_hba.conf
+!deploy/postgres/pg_ident.conf
+!deploy/postgres/server-cert.cnf.template
+!deploy/postgres/00-provision.sql
+!deploy/postgres/10-enable-migration.sql
+!deploy/postgres/20-finalize.sql
+!deploy/postgres/listen-addresses.mjs
+!deploy/postgres/normal-entrypoint.sh
