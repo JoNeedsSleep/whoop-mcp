@@ -6,6 +6,8 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { exact, tailnetHostname } from '../railway/config.mjs';
 
 const HOST = 'api.prod.whoop.com';
+export const LOOPBACK_ORIGIN = 'http://localhost:17645';
+export const LOOPBACK_MARKER_HEADER = 'x-whoop-local-ingress';
 const COOKIE = '__Host-whoop_identity';
 const TTL = 300000;
 const unavailable = () => { throw new Error('IDENTITY_UNAVAILABLE'); };
@@ -19,6 +21,17 @@ export function parseIdentityConfig(raw) {
     exact(raw, ['mode', 'hostname', 'clientId', 'clientSecret']);
     if (raw.mode !== 'whoop-owner-identity') unavailable();
     tailnetHostname(raw.hostname);
+    for (const key of ['clientId', 'clientSecret']) if (typeof raw[key] !== 'string' || !/^[\x21-\x7e]{1,2048}$/.test(raw[key])) unavailable();
+    return { ...raw };
+  } catch { unavailable(); }
+}
+
+// A separate explicit schema keeps production provisioning and runtime parsing
+// restricted to their existing HTTPS hostname contract.
+export function parseLoopbackIdentityConfig(raw) {
+  try {
+    exact(raw, ['mode', 'clientId', 'clientSecret']);
+    if (raw.mode !== 'whoop-owner-identity-loopback') unavailable();
     for (const key of ['clientId', 'clientSecret']) if (typeof raw[key] !== 'string' || !/^[\x21-\x7e]{1,2048}$/.test(raw[key])) unavailable();
     return { ...raw };
   } catch { unavailable(); }
@@ -93,10 +106,13 @@ async function form(req) {
   return parameters(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)), ['csrf', 'confirmed']);
 }
 
-export function createIdentityServer(raw, { upstream = requestWhoop, now = Date.now, ttlMs = TTL } = {}) {
-  const config = parseIdentityConfig(raw);
+export function createIdentityServer(raw, { upstream = requestWhoop, now = Date.now, ttlMs = TTL, loopbackMarker } = {}) {
+  const loopback = raw?.mode === 'whoop-owner-identity-loopback';
+  const config = loopback ? parseLoopbackIdentityConfig(raw) : parseIdentityConfig(raw);
+  if (loopback && (typeof loopbackMarker !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(loopbackMarker))) unavailable();
   if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > TTL) unavailable();
-  const origin = `https://${config.hostname}`; const redirectUri = origin + '/whoop/callback';
+  const origin = loopback ? LOOPBACK_ORIGIN : `https://${config.hostname}`; const redirectUri = origin + '/whoop/callback';
+  const expectedHost = loopback ? 'localhost:17645' : config.hostname;
   const started = now(); let phase = 'intro'; let binding; let csrf; let state; let verifier; let profile;
   let accessToken; let revokePending; let closing; let stopped = false; let completed = false; let finish;
   const active = new Set(); const done = new Promise(resolve => { finish = resolve; });
@@ -112,12 +128,17 @@ export function createIdentityServer(raw, { upstream = requestWhoop, now = Date.
   async function route(req, res) {
     let ownsOperation = false;
     try {
-      let hosts = 0; let origins = 0; let forwarded = 0;
+      let hosts = 0; let origins = 0; let forwarded = 0; let markers = 0; let untrustedForwarding = false;
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const name = req.rawHeaders[i].toLowerCase(); if (name === 'host') hosts++; if (name === 'origin') origins++; if (name === 'x-forwarded-proto') forwarded++;
+        if (name === LOOPBACK_MARKER_HEADER) markers++;
+        if (name === 'forwarded' || name.startsWith('x-forwarded-')) untrustedForwarding = true;
       }
+      const transportValid = loopback
+        ? !untrustedForwarding && markers === 1 && equal(req.headers[LOOPBACK_MARKER_HEADER], loopbackMarker)
+        : forwarded === 1 && req.headers['x-forwarded-proto'] === 'https';
       if (!live() || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) ||
-          hosts !== 1 || req.headers.host !== config.hostname || forwarded !== 1 || req.headers['x-forwarded-proto'] !== 'https' ||
+          hosts !== 1 || req.headers.host !== expectedHost || !transportValid ||
           origins > 1 || (origins === 1 && req.headers.origin !== origin) ||
           typeof req.url !== 'string' || req.url.length > 4096 || !req.url.startsWith('/') || req.url.startsWith('//') || req.url.includes('#')) unavailable();
       const url = new URL(req.url, origin);

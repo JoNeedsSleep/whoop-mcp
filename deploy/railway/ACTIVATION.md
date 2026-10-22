@@ -1,5 +1,19 @@
 # Personal real-data activation plan
 
+**Retired in favor of local-only sync.** The WHOOP Railway project was deleted
+through the normal 48-hour recovery window, and Hobby renewal was cancelled.
+Railway confirmed that it was stopping account resources and showed a final
+amount due of $0.00; the existing paid period ends on 2026-11-18. The obsolete
+gateway receipt schedule is paused. The replacement WHOOP app secret and real
+health grant were kept local. The local connection, two client readers and quiet
+15-minute worker were verified separately; see
+[local sync](../local-sync/README.md). Keep the PR draft and unmerged.
+
+The remainder records historical Railway preparation and validation. It is not
+the current runtime or authorization to recreate services. Deletion is not proof
+of erasure from provider backups or variable history. Personal Tailscale device
+registrations and access rules were not removed by deleting the Railway project.
+
 Prepared 2026-10-19. This is a reviewable plan, not evidence of deployment or
 permission to perform its remaining account, billing or database actions.
 The gateway still uses synthetic data. Keep the PR draft.

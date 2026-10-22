@@ -43,12 +43,16 @@ export function createReader({ cacheFile, clientId, now = Date.now }) {
     if (message.method === "initialize") {
       if (initialized || !fields(params, ["protocolVersion", "capabilities", "clientInfo"], ["_meta"]) || !validMeta(params) ||
           typeof params.protocolVersion !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(params.protocolVersion) ||
-          !object(params.capabilities) || !fields(params.clientInfo, ["name", "version"], ["title"]) ||
+          !object(params.capabilities) || !fields(params.clientInfo, ["name", "version"], ["title", "description", "websiteUrl"]) ||
           typeof params.clientInfo.name !== "string" || params.clientInfo.name.length > 128 ||
           typeof params.clientInfo.version !== "string" || params.clientInfo.version.length > 128 ||
-          (params.clientInfo.title !== undefined && (typeof params.clientInfo.title !== "string" || params.clientInfo.title.length > 128))) {
+          (params.clientInfo.title !== undefined && (typeof params.clientInfo.title !== "string" || params.clientInfo.title.length > 128)) ||
+          (params.clientInfo.description !== undefined && (typeof params.clientInfo.description !== "string" || params.clientInfo.description.length > 1024)) ||
+          (params.clientInfo.websiteUrl !== undefined && (typeof params.clientInfo.websiteUrl !== "string" || params.clientInfo.websiteUrl.length > 2048))) {
         return error(-32602, "Invalid params", id);
       }
+      // Standard implementation metadata is bounded, then discarded. Never
+      // interpret a client website URL or reflect client prose into MCP output.
       initialized = true;
       result = { protocolVersion: PROTOCOL_VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : PROTOCOL_VERSIONS[0],
         capabilities: { tools: {} }, serverInfo: { name: "whoop-restricted-local", version: "1.0.0" } };

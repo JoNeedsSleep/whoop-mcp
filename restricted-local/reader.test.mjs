@@ -129,6 +129,45 @@ test("reader enforces initialization without reflecting untrusted client metadat
   assert.equal(handle(initialize).error.code, -32602);
 });
 
+test("native Claude Code implementation metadata initializes over stdio without changing output or tools", async (t) => {
+  const f = fixture(t), native = structuredClone(initialize);
+  native.params.clientInfo = { name: "claude-code", title: "Claude Code", version: "2.1.241",
+    description: "Anthropic's agentic coding tool", websiteUrl: "https://claude.com/claude-code" };
+  const result = await subprocess(f, lines([native, initialized, request(2, "tools/list"), call(3, f.today)]));
+  assert.equal(result.code, 0); assert.equal(result.stderr, "");
+  assert.deepEqual(result.messages[0].result, { protocolVersion: "2025-11-25", capabilities: { tools: {} },
+    serverInfo: { name: "whoop-restricted-local", version: "1.0.0" } });
+  assert.deepEqual(result.messages[1].result.tools, TOOLS);
+  assert.deepEqual(result.messages[2].result.structuredContent, f.record.snapshot.summaries[6]);
+  assert.doesNotMatch(result.stdout, /Anthropic|claude\.com|description.*agentic/);
+});
+
+test("optional implementation metadata is bounded and discarded, never fetched, with unknown fields still rejected", (t) => {
+  const f = fixture(t), handle = createReader({ cacheFile: f.cacheFile, clientId: "codex", now: () => f.now });
+  for (const metadata of [
+    { description: "x".repeat(1025) }, { description: null }, { description: 7 }, { description: {} },
+    { websiteUrl: "x".repeat(2049) }, { websiteUrl: null }, { websiteUrl: 7 }, { websiteUrl: [] },
+    { instructions: "SECRET_SENTINEL" }, { description: "valid", websiteUrl: "https://example.test", extra: true },
+  ]) {
+    const message = structuredClone(initialize); Object.assign(message.params.clientInfo, metadata);
+    assert.equal(handle(message).error.code, -32602);
+  }
+  const message = structuredClone(initialize);
+  message.params.clientInfo.description = "SECRET_SENTINEL".padEnd(1024, "x");
+  message.params.clientInfo.websiteUrl = "https://169.254.169.254/SECRET_SENTINEL".padEnd(2048, "x");
+  const originalFetch = globalThis.fetch; let calls = 0;
+  globalThis.fetch = () => { calls++; throw new Error("NETWORK_MUST_NOT_RUN"); };
+  try {
+    const response = handle(message);
+    assert.equal(response.result.serverInfo.name, "whoop-restricted-local");
+    assert.equal(JSON.stringify(response).includes("SECRET_SENTINEL"), false);
+    assert.equal(handle(initialized), null);
+    assert.deepEqual(handle(request(2, "tools/list")).result.tools, TOOLS);
+    assert.equal(handle(request(3, "tools/list", { cursor: "untrusted" })).error.code, -32602);
+    assert.equal(calls, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("subprocess rejects malicious cache content, cross-client reads and cache path changes with fixed errors", async (t) => {
   const f = fixture(t);
   const bad = structuredClone(f.record);
