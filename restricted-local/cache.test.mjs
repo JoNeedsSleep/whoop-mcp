@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DAY_MS, TOOLS, validateInput, validateSummary, validateSnapshot } from "./policy.mjs";
+import { DAY_MS, TOOLS, LOCAL_TIME_ZONE, localDate, validateInput, validateSummary, validateSnapshot } from "./policy.mjs";
 import { CACHE_TTL_MS, MAX_CACHE_BYTES, readCache, writeCache } from "./cache.mjs";
 
 const NOW = Date.parse("2026-10-18T12:00:00.000Z");
@@ -133,6 +133,31 @@ test("cache keeps the sync-day window across midnight and never outlives authori
   writeCache(filename, short, NOW);
   assert.deepEqual(readCache(filename, "codex", short.expiresAt - 1), short);
   rejects(() => readCache(filename, "codex", short.expiresAt));
+});
+
+test("v2 cache preserves Chicago sync date across local midnight with all64 bounded sessions", (t) => {
+  const { filename } = fixture(t), syncedAt = Date.parse("2026-10-23T04:45:00Z"), windowEnd = localDate(syncedAt);
+  const summaries = Array.from({ length: 7 }, (_, day) => {
+    const date = new Date(Date.parse(windowEnd) - (6 - day) * DAY_MS).toISOString().slice(0, 10);
+    const sleep_sessions = Array.from({ length: day === 6 ? 4 : 10 }, (_, i) => {
+      const start_ms = Date.parse(date) + (6 + i) * 3600000;
+      return { start_ms, end_ms: start_ms + 1800000, nap: i !== 0, score_state: "SCORED", asleep_ms: 1500000,
+        in_bed_ms: 1800000, awake_ms: 200000, light_ms: 900000, deep_ms: 300000, rem_ms: 300000,
+        no_data_ms: 100000, sleep_performance: 90 };
+    });
+    return { date, status: "AVAILABLE", recovery_score: 80, hrv_ms: 50, resting_heart_rate: 60,
+      sleep_ms: sleep_sessions.length * 1500000, sleep_performance: 90, strain: 12,
+      time_zone: LOCAL_TIME_ZONE, sleep_complete: true, sleep_sessions };
+  });
+  const value = { ...record(syncedAt), snapshot: { version: 2, timeZone: LOCAL_TIME_ZONE, windowEnd, summaries } };
+  writeCache(filename, value, syncedAt);
+  assert(fs.statSync(filename).size > 16384); assert(fs.statSync(filename).size <= MAX_CACHE_BYTES);
+  assert.deepEqual(readCache(filename, "codex", syncedAt + 60 * 60000), value);
+  assert.equal(localDate(syncedAt + 60 * 60000), "2026-10-23");
+  assert.equal(readCache(filename, "codex", syncedAt + 60 * 60000).snapshot.windowEnd, "2026-10-22");
+  rejects(() => readCache(filename, "codex", syncedAt + CACHE_TTL_MS));
+  const forged = structuredClone(value); forged.snapshot.timeZone = "UTC";
+  rejects(() => writeCache(filename, forged, syncedAt));
 });
 
 test("atomic replacement leaves an open reader's old complete file intact and removes temporary files", (t) => {

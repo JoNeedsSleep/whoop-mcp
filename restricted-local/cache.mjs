@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { DAY_MS, validateSnapshot } from "./policy.mjs";
 
-export const MAX_CACHE_BYTES = 16384;
+export const MAX_CACHE_BYTES = 128 * 1024;
 export const CACHE_TTL_MS = 90 * 60000;
 const unavailable = () => { throw new Error("LOCAL_CACHE_UNAVAILABLE"); };
 const clients = new Set(["codex", "claude-code"]);
@@ -31,8 +31,8 @@ function record(raw, clientId, now) {
   if (raw.syncedAt > now || raw.expiresAt <= now || raw.authorizationExpiresAt <= now ||
       raw.expiresAt > raw.syncedAt + CACHE_TTL_MS || raw.expiresAt > raw.authorizationExpiresAt ||
       raw.authorizationExpiresAt > raw.syncedAt + 7 * DAY_MS) unavailable();
-  // A snapshot records its sync day's fixed window. Its short freshness deadline
-  // still applies after UTC midnight; never relabel yesterday's cached values.
+  // A snapshot records its sync day's fixed window in its validated timezone.
+  // Its short deadline still applies after midnight; never relabel cached data.
   return { version: 1, clientId, syncedAt: raw.syncedAt, expiresAt: raw.expiresAt,
     authorizationExpiresAt: raw.authorizationExpiresAt, snapshot: validateSnapshot(raw.snapshot, raw.syncedAt) };
 }

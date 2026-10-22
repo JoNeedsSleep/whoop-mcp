@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { MAX_CACHE_BYTES } from '../../restricted-local/cache.mjs';
 
 export const AUTHORIZATION_TTL_MS = 7 * 86400000;
 export const SYNC_INTERVAL_MS = 15 * 60000;
@@ -70,7 +71,7 @@ function removeCaches(paths) {
   const present = [];
   for (const filename of Object.values(paths)) {
     privateDirectory(path.dirname(filename));
-    try { privateFile(fs.lstatSync(filename), 16384); present.push(filename); }
+    try { privateFile(fs.lstatSync(filename), MAX_CACHE_BYTES); present.push(filename); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   for (const filename of present) { fs.unlinkSync(filename); syncDirectory(path.dirname(filename)); }

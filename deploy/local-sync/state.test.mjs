@@ -6,6 +6,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { authorizeGrant, validateGrant, withLockedState, AUTHORIZATION_TTL_MS, SYNC_INTERVAL_MS } from './state.mjs';
+import { writeCache, CACHE_TTL_MS } from '../../restricted-local/cache.mjs';
+import { DAY_MS, LOCAL_TIME_ZONE, localDate } from '../../restricted-local/policy.mjs';
 
 const NOW = Date.parse('2026-10-22T12:00:00Z');
 const denied = { message: 'LOCAL_SYNC_UNAVAILABLE' };
@@ -102,6 +104,31 @@ test('symlink, hardlink, public directory and unsafe cache substitutions fail be
   fs.chmodSync(f.authDir, 0o755); await assert.rejects(authorizeGrant(grant(), f), denied); fs.chmodSync(f.authDir, 0o700);
   fs.symlinkSync(outside, f.cachePaths.codex); await assert.rejects(authorizeGrant(grant(), f), denied);
   assert.equal(fs.readFileSync(outside, 'utf8'), 'sentinel');
+});
+
+test('discard removes legitimate v2 session caches larger than the old16KiB limit', async t => {
+  const f = fixture(t); await authorizeGrant(grant(), f); const windowEnd = localDate(NOW);
+  const summaries = Array.from({ length: 7 }, (_, day) => {
+    const date = new Date(Date.parse(windowEnd) - (6 - day) * DAY_MS).toISOString().slice(0, 10);
+    const sleep_sessions = Array.from({ length: day === 6 ? 4 : 10 }, (_, index) => {
+      const start_ms = Date.parse(date) + (6 + index) * 3600000;
+      return { start_ms, end_ms: start_ms + 1800000, nap: index !== 0, score_state: 'SCORED', asleep_ms: 1500000,
+        in_bed_ms: 1800000, awake_ms: 200000, light_ms: 900000, deep_ms: 300000, rem_ms: 300000,
+        no_data_ms: 100000, sleep_performance: 90 };
+    });
+    return { date, status: 'AVAILABLE', recovery_score: null, hrv_ms: null, resting_heart_rate: null,
+      sleep_ms: sleep_sessions.length * 1500000, sleep_performance: 90, strain: null,
+      time_zone: LOCAL_TIME_ZONE, sleep_complete: true, sleep_sessions };
+  });
+  for (const [clientId, filename] of Object.entries(f.cachePaths)) {
+    writeCache(filename, { version: 1, clientId, syncedAt: NOW, expiresAt: NOW + CACHE_TTL_MS,
+      authorizationExpiresAt: grant().authorizationExpiresAt,
+      snapshot: { version: 2, timeZone: LOCAL_TIME_ZONE, windowEnd, summaries } }, NOW);
+    assert(fs.statSync(filename).size > 16384);
+  }
+  await withLockedState(store => store.discard(), f);
+  assert.equal(await withLockedState(store => store.read().grant, f), null);
+  assert(Object.values(f.cachePaths).every(filename => !fs.existsSync(filename)));
 });
 
 test('discard removes durable credentials and both caches without deleting admission history', async t => {

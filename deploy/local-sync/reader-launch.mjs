@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-export const READER_IMAGE = 'sha256:7fae1a25c261a6a9fe2a744916d5b1b00ad189667cfa39f264f0064ffe358dc5';
+export const READER_IMAGE = 'sha256:a1b4280ff3a0d418e642408f2e7c9941b1eddd4179141a7b9a562bc97e906758';
 export const DOCKER = '/usr/local/bin/docker';
 export const DOCKER_HOST = `unix://${os.homedir()}/.orbstack/run/docker.sock`;
 // Exact immutable generation labels; no authorization or config is read here.

@@ -2,6 +2,43 @@
 
 Review draft based on upstream `148f12076885cfe3f5f35b21a315ff71832c11e2`.
 
+## Current local sleep follow-up
+
+The active integration is now the owner's local-only sync and offline readers;
+the Railway project was retired and its subscription renewal cancelled. Older
+remote deployment sections below are historical review evidence, not the active
+topology. The PR remains draft.
+
+At the owner's request, the local collector now groups all sleep sessions and
+naps by their America/Chicago end date. It exhausts bounded pagination, reconciles
+duplicate IDs by update time, rejects conflicting versions and overlapping
+sessions, and joins recovery to the latest main sleep. Cycle strain remains a
+physiological-cycle value, assigned by local cycle start date. Complete-day sleep
+totals require every returned session to be scored; unscored sessions stay visible
+without inventing a total. Today remains a partial calendar day.
+
+The version-two cache boundary permits only the fixed timezone, dates, bounded
+numeric timestamps/durations, booleans and fixed scoring enums. It reconstructs
+at most 16 sessions per day and 64 per seven-day window; no provider IDs, names,
+free text or URLs reach the clients. The bounded cache ceiling is 128 KiB, and
+authorization cleanup uses the same ceiling. The existing tool name, offline
+reader, private per-client mounts, ninety-minute freshness, fixed seven-day
+authorization and fifteen-minute admission rule remain unchanged. Legacy
+version-one snapshots keep their original UTC semantics.
+
+WHOOP exposes stage-duration totals, not timestamped stage transitions, through
+its public API. It does not expose period-tracking records there. No stage
+timeline, period dates or menstrual phases are inferred. See the
+[official API reference](https://developer.whoop.com/api/).
+
+Independent collector/boundary cross-review passed. The revised source passed
+110 tests in a verified offline Node 22 container, with no host files,
+credentials, SSH forwarding or new dependency downloads. Source integrity before
+and after execution and cleanup were verified. Coverage includes Chicago/DST
+boundaries, overnight sleeps and naps, deduplication, pagination exhaustion,
+unscored records, unknown fields, hostile values, fixed HTTPS/TLS paths and
+timeouts, both client protocols, and cleanup of expanded caches on revocation.
+
 The owner subsequently chose quiet local security receipts instead of external
 alerting. See [the receipt checker](deploy/local-receipts/README.md) for its
 limited coverage. It is an independent observation from the laptop, not an

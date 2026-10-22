@@ -16,8 +16,33 @@ attempt finishes. The laptop and OrbStack must be running. Sleeping pauses work;
 waking does not cause a burst of missed syncs. There is also a durable 15-minute
 admission check, so restarting the worker cannot repeatedly refresh the grant.
 
-The MCP tool is `get_health_summary`, with a UTC date argument. Its output is a
-validated numerical daily summary from the most recent seven-day collection.
+The MCP tool is `get_health_summary`, with an America/Chicago calendar date.
+Its output covers the most recent seven local dates. Sleep sessions belong to
+the local date on which they end, so an overnight session stays together. Every
+session is included, including naps; pages are exhausted and duplicate records
+are reconciled before totals are calculated. A partial or unscored session makes
+the day's total unavailable instead of silently reporting a partial total.
+
+Each session includes its start/end timestamps, nap flag, scoring state, time
+asleep, time in bed, and WHOOP's estimated light, deep, REM, awake and missing-data
+durations. These are per-session stage totals: the public API does not provide
+the sequence or timestamp of stage transitions. Start/end bound a sleep session,
+not a promise that every moment in that interval was asleep. The daily sleep
+performance value belongs to the latest main sleep, not an average of naps.
+Recovery is associated with that main sleep. Strain remains a physiological-cycle
+measurement, assigned to the local date the cycle starts, not a midnight-to-
+midnight measurement.
+
+The fixed timezone uses daylight-saving rules rather than a constant UTC offset.
+Travel does not automatically change this configured timezone. Old version-one
+caches remain explicitly UTC; they are never relabeled as local data.
+
+WHOOP's public API does not currently expose Menstrual Cycle Insights or period
+logs. The API's `cycle` endpoint describes sleep/wake physiological cycles, not
+menstrual cycles. No period dates or phases are inferred from recovery metrics.
+See [WHOOP's public API](https://developer.whoop.com/api/) and
+[sleep data model](https://developer.whoop.com/docs/developing/user-data/sleep/).
+
 Reader caches expire after 90 minutes, or at the seven-day authorization
 deadline if earlier. Stale data produces `LOCAL_HEALTH_DATA_UNAVAILABLE`.
 Neither reader logs in, refreshes credentials, downloads code, or contacts WHOOP.
@@ -103,3 +128,11 @@ Codex tool call and Claude Code's native connection check. The quiet scheduler
 was registered and its first attempt was correctly limited by the durable
 15-minute gate. Verification records contain status/counts and isolation
 metadata, not profile details, tokens or health measurements.
+
+The local-date/sleep follow-up passed 110 isolated tests, then 13 focused tests
+after the reader image pin changed. Both immutable packages passed source and
+isolation checks. The packaged sync wrote a synthetic version-two snapshot to
+both caches and denied an early second attempt; both packaged client readers
+returned main-sleep and nap stage durations through stdio. No new dependencies
+were fetched. Existing client processes need reconnecting to load an updated
+reader image; a new client session uses the installed bridge's current pin.

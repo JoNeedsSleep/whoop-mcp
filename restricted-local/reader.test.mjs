@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
-import { DAY_MS, TOOLS } from "./policy.mjs";
+import { DAY_MS, TOOLS, LOCAL_TIME_ZONE, localDate } from "./policy.mjs";
 import { writeCache, CACHE_TTL_MS } from "./cache.mjs";
 import { createReader, runReader, MAX_FRAME_BYTES } from "./reader.mjs";
 
@@ -71,6 +71,27 @@ test("stdio process initializes with fixed tools and returns only the selected c
   assert.deepEqual(JSON.parse(result.messages[3].result.content[0].text), f.record.snapshot.summaries[6]);
   assert.equal(result.stdout.includes("authorizationExpiresAt"), false);
   assert.equal(result.stdout.includes(f.cacheFile), false);
+});
+
+test("same offline tool returns v2 Chicago sleep sessions and never relabels them as UTC", async (t) => {
+  const f = fixture(t), date = localDate(f.now);
+  const sleep = { start_ms: f.now - 3600000, end_ms: f.now, nap: false, score_state: "SCORED",
+    asleep_ms: 3000000, in_bed_ms: 3600000, awake_ms: 300000, light_ms: 1800000,
+    deep_ms: 600000, rem_ms: 600000, no_data_ms: 300000, sleep_performance: 90 };
+  const summaries = Array.from({ length: 7 }, (_, i) => ({ date: new Date(Date.parse(date) - (6 - i) * DAY_MS).toISOString().slice(0, 10),
+    status: i === 6 ? "AVAILABLE" : "NO_DATA", recovery_score: null, hrv_ms: null, resting_heart_rate: null,
+    sleep_ms: i === 6 ? 3000000 : null, sleep_performance: i === 6 ? 90 : null, strain: null,
+    time_zone: LOCAL_TIME_ZONE, sleep_complete: i === 6, sleep_sessions: i === 6 ? [sleep] : [] }));
+  const value = { ...f.record, snapshot: { version: 2, timeZone: LOCAL_TIME_ZONE, windowEnd: date, summaries } };
+  writeCache(f.cacheFile, value, f.now);
+  const result = await subprocess(f, lines([initialize, initialized, request(2, "tools/list"), call(3, date)]));
+  assert.equal(result.code, 0); assert.equal(result.stderr, "");
+  assert.deepEqual(result.messages[1].result.tools, TOOLS); assert.equal(TOOLS.length, 1);
+  assert.match(TOOLS[0].description, /America\/Chicago/);
+  assert.deepEqual(result.messages[2].result.structuredContent, summaries[6]);
+  assert.deepEqual(JSON.parse(result.messages[2].result.content[0].text), summaries[6]);
+  assert(Buffer.byteLength(JSON.stringify(result.messages[2])) < MAX_FRAME_BYTES);
+  assert.doesNotMatch(result.stdout, /authorizationExpiresAt|clientSecret|refreshToken/);
 });
 
 test("reader never invokes fetch for valid, missing, expired or out-of-window cache data", (t) => {

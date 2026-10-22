@@ -1,4 +1,4 @@
-import { collectSnapshot } from '../local-view/snapshot.mjs';
+import { collectSnapshot } from './snapshot.mjs';
 import { validateSnapshot } from '../../restricted-local/policy.mjs';
 import { CACHE_TTL_MS, writeCache } from '../../restricted-local/cache.mjs';
 import { requestOAuth, validateTokenResponse } from './oauth.mjs';

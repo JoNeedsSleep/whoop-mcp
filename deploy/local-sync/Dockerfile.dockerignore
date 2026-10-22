@@ -8,6 +8,7 @@
 !deploy/local-sync/oauth.mjs
 !deploy/local-sync/state.mjs
 !deploy/local-sync/sync.mjs
+!deploy/local-sync/snapshot.mjs
 !deploy/local-sync/entrypoint.sh
 !deploy/local-view/
 !deploy/local-view/snapshot.mjs
